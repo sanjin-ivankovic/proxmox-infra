@@ -1,0 +1,59 @@
+---
+# playbooks/bootstrap-cluster.yml
+
+# Pre-initialize temporary directory
+- name: Configure ansible directories
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Create ansible temp directory with proper permissions
+      ansible.builtin.file:
+        path: '/tmp/.ansible/tmp'
+        state: directory
+        mode: '1777'
+
+# Bootstrap K3s cluster (masters first, then workers)
+# Note: K3s nodes should be bootstrapped as Linux VMs first (creates maintainer user, disables root)
+# This playbook installs K3s using the maintainer user with sudo
+
+# Bootstrap first K3s master
+- name: Bootstrap first K3s master
+  hosts: masters[0]
+  become: true
+  gather_facts: true
+  remote_user: maintainer  # Use non-root user (root login disabled after Linux VM bootstrap)
+  roles:
+    - k3s_system_prep
+    - k3s_cluster
+
+# Ensure the first master is ready before proceeding
+- name: Wait for first master to be ready
+  hosts: masters[0]
+  become: true
+  tasks:
+    - name: Wait for K3s API server
+      ansible.builtin.wait_for:
+        port: 6443
+        host: '{{ ansible_host }}'
+        delay: 10
+
+# Bootstrap additional K3s masters (one at a time)
+- name: Bootstrap additional K3s masters
+  hosts: masters[1:]
+  become: true
+  gather_facts: true
+  remote_user: maintainer  # Use non-root user (root login disabled after Linux VM bootstrap)
+  serial: 1
+  roles:
+    - k3s_system_prep
+    - k3s_cluster
+
+# Bootstrap K3s workers
+- name: Bootstrap K3s workers
+  hosts: workers
+  become: true
+  gather_facts: true
+  remote_user: maintainer  # Use non-root user (root login disabled after Linux VM bootstrap)
+  roles:
+    - k3s_system_prep
+    - k3s_cluster

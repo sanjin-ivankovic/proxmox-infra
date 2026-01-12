@@ -1,0 +1,123 @@
+# Docker Directory Structure
+
+This directory is the base location for Docker container deployments on this host.
+
+## Directory Structure
+
+Each application should create its own subdirectory under `/srv/docker/` with the following structure:
+
+```
+/srv/docker/
+├── README.md                    # This file
+├── {app-name-1}/                # Application directory (created per application)
+│   ├── docker-compose.yml      # Created by GitLab CI/CD
+│   ├── .env                    # Created by GitLab CI/CD (if needed)
+│   ├── data/                   # Persistent application data
+│   ├── config/                 # Application configuration files
+│   └── logs/                   # Application logs
+├── {app-name-2}/
+│   ├── docker-compose.yml
+│   ├── .env
+│   ├── data/
+│   ├── config/
+│   └── logs/
+└── ...
+```
+
+## GitLab CI/CD Deployment
+
+This infrastructure is designed to work with GitLab CI/CD pipelines:
+
+- **GitLab manages**: `docker-compose.yml` and `.env` files per application
+- **Ansible manages**: Docker installation and base directory structure
+- **Application directories**: Created by GitLab CI/CD pipelines during deployment
+
+### GitLab Pipeline Structure
+
+GitLab CI/CD pipelines should:
+1. Create application directory: `/srv/docker/{app-name}/`
+2. Create subdirectories: `data/`, `config/`, `logs/`
+3. Deploy `docker-compose.yml` to the application directory
+4. Deploy `.env` file (if needed) to the application directory
+5. Run `docker compose up -d` from the application directory
+
+## Best Practices
+
+### Per-Application Directories
+
+Each application should have its own directory to ensure:
+- **Isolation**: Application data is separated
+- **Scalability**: Easy to add/remove applications
+- **Maintainability**: Clear organization and structure
+- **GitLab-friendly**: Each app can be deployed independently
+
+### Directory Permissions
+
+- Base directory (`/srv/docker/`): `0755` (owner: {{ user }}, group: docker)
+- Application directories: `0750` (owner: {{ user }}, group: docker)
+- Data/config directories: `0750` (owner: {{ user }}, group: docker)
+- Logs directories: `0750` (owner: {{ user }}, group: docker)
+
+### Docker Compose Files
+
+- Place `docker-compose.yml` in each application's directory
+- Use relative paths for volumes (e.g., `./data:/app/data`)
+- Example: `/srv/docker/searxng/docker-compose.yml`
+
+### Volume Mounts
+
+When defining volumes in your compose file, use paths relative to the application directory:
+
+```yaml
+services:
+  app:
+    image: app:latest
+    volumes:
+      - ./data:/app/data          # Application data
+      - ./config:/app/config      # Configuration files
+      - ./logs:/app/logs          # Application logs
+    environment:
+      - TZ=Europe/Berlin
+      - PUID={{ common_docker_puid }}
+      - PGID={{ common_docker_pgid }}
+```
+
+### GitLab CI/CD Example
+
+```yaml
+# .gitlab-ci.yml example
+deploy:
+  script:
+    - mkdir -p /srv/docker/${CI_PROJECT_NAME}/{data,config,logs}
+    - cp docker-compose.yml /srv/docker/${CI_PROJECT_NAME}/
+    - cp .env /srv/docker/${CI_PROJECT_NAME}/ 2>/dev/null || true
+    - cd /srv/docker/${CI_PROJECT_NAME}
+    - docker compose up -d
+```
+
+## Manual Application Directory Creation
+
+If deploying manually (without GitLab CI/CD):
+
+1. Create the application directory:
+   ```bash
+   mkdir -p /srv/docker/{app-name}/{data,config,logs}
+   chown -R {{ user }}:docker /srv/docker/{app-name}
+   chmod -R 0750 /srv/docker/{app-name}
+   ```
+
+2. Create your `docker-compose.yml` file in the application directory
+
+3. Deploy using docker compose:
+   ```bash
+   cd /srv/docker/{app-name}
+   docker compose up -d
+   ```
+
+## Notes
+
+- Docker daemon runs as root, but containers are managed by user: `{{ user }}` (member of docker group)
+- This directory (`/srv/docker/`) is for application-specific data and configuration
+- The base directory is owned by user: `{{ user }}` with group: `docker`
+- Follow Linux FHS standards: `/srv` is for site-specific data
+- GitLab CI/CD pipelines handle application deployment and updates

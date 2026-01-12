@@ -1,0 +1,83 @@
+# Podman Directory Structure
+
+This directory is the base location for Podman container deployments on this host.
+
+## Directory Structure
+
+Each application should create its own subdirectory under `/srv/podman/` with the following structure:
+
+```
+/srv/podman/
+├── README.md                    # This file
+├── {app-name-1}/                # Application directory (create per application)
+│   ├── compose.yml             # Podman compose file
+│   ├── data/                   # Persistent application data
+│   ├── config/                 # Application configuration files
+│   └── logs/                   # Application logs
+├── {app-name-2}/
+│   ├── compose.yml
+│   ├── data/
+│   ├── config/
+│   └── logs/
+└── ...
+```
+
+## Best Practices
+
+### Per-Application Directories
+
+Each application should have its own directory to ensure:
+- **Isolation**: Application data is separated
+- **Scalability**: Easy to add/remove applications
+- **Maintainability**: Clear organization and structure
+
+### Directory Permissions
+
+- Base directory (`/srv/podman/`): `0755` (owner: {{ common_podman_user }})
+- Application directories: `0750` (owner: {{ common_podman_user }})
+- Data/config directories: `0750` (owner: {{ common_podman_user }})
+- Logs directories: `0750` (owner: {{ common_podman_user }})
+
+### Podman Compose Files
+
+- Place `compose.yml` (or `docker-compose.yml`) in each application's directory
+- Use relative paths for volumes (e.g., `./data:/app/data`)
+- Example: `/srv/podman/searxng/compose.yml`
+
+### Volume Mounts
+
+When defining volumes in your compose file, use paths relative to the application directory:
+
+```yaml
+services:
+  app:
+    image: app:latest
+    volumes:
+      - ./data:/app/data          # Application data
+      - ./config:/app/config      # Configuration files
+      - ./logs:/app/logs          # Application logs
+```
+
+### Creating a New Application Directory
+
+1. Create the application directory:
+   ```bash
+   mkdir -p /srv/podman/{app-name}/{data,config,logs}
+   chown -R {{ common_podman_user }}:{{ common_podman_user }} /srv/podman/{app-name}
+   chmod -R 0750 /srv/podman/{app-name}
+   ```
+
+2. Create your `compose.yml` file in the application directory
+
+3. Deploy using podman-compose:
+   ```bash
+   cd /srv/podman/{app-name}
+   podman-compose up -d
+   ```
+
+## Notes
+
+- Rootless Podman stores its runtime data (images, containers) in `~/.local/share/containers/` automatically
+- This directory (`/srv/podman/`) is for application-specific data and configuration
+- The base directory is owned by user: `{{ common_podman_user }}`
+- Follow Linux FHS standards: `/srv` is for site-specific data

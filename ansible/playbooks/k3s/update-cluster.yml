@@ -1,0 +1,33 @@
+---
+# playbooks/k3s/update-cluster.yml
+# Update K3s cluster to target version (rolling update)
+
+# Pre-initialize temporary directory with proper permissions
+- name: Configure ansible directories
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Create ansible temp directory with proper permissions
+      ansible.builtin.file:
+        path: '/tmp/.ansible/tmp'
+        state: directory
+        mode: '1777'
+        owner: root
+        group: root
+      become: true
+
+- name: Update K3s Cluster
+  hosts: k3s_cluster
+  become: true
+  gather_facts: true
+  remote_user: maintainer  # Use non-root user (root login disabled after bootstrap)
+  serial: 1 # Process one node at a time
+  vars_files:
+    - ../../k3s/inventory/group_vars/all/vault.yml
+    - ../../k3s/inventory/group_vars/k3s_cluster/main.yml
+  tasks:
+    - name: Include K3s update tasks only
+      ansible.builtin.include_role:
+        name: k3s_cluster
+        tasks_from: 07-update.yml
+      tags: [update]

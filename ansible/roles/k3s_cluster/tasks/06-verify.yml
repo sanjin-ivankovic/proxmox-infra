@@ -1,0 +1,34 @@
+---
+# roles/k3s_cluster_cluster/tasks/05-verify.yml
+
+# Query the K3s cluster to get information about all nodes and their status
+- name: Check node status in cluster
+  ansible.builtin.shell: |
+    kubectl get nodes -o wide
+  register: k3s_cluster_node_status
+  changed_when: false
+  run_once: true
+  delegate_to: "{{ groups['masters'][0] }}"
+
+# Display the results of the node status check to provide visibility into cluster health
+- name: Show node status
+  ansible.builtin.debug:
+    var: node_status.stdout_lines
+  run_once: true
+  delegate_to: "{{ groups['masters'][0] }}"
+
+# Query all pods across all namespaces to verify workloads are running properly
+- name: Check pod status
+  ansible.builtin.shell: |
+    kubectl get pods -A -o wide
+  register: k3s_cluster_pod_status
+  changed_when: false
+  run_once: true
+  delegate_to: "{{ groups['masters'][0] }}"
+
+# Display the results of the pod status check to provide visibility into application health
+- name: Show pod status
+  ansible.builtin.debug:
+    var: pod_status.stdout_lines
+  run_once: true
+  delegate_to: "{{ groups['masters'][0] }}"

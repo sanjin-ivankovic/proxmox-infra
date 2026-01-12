@@ -1,0 +1,87 @@
+---
+# Update DNS servers on K3s cluster nodes using netplan
+# This ensures DNS configuration persists across reboots
+
+- name: Update DNS Servers
+  hosts: k3s_cluster
+  become: true
+  remote_user: maintainer  # Use non-root user (root login disabled after bootstrap)
+  vars_files:
+    - ../inventory/group_vars/all/main.yml
+  tasks:
+    - name: Get current DNS servers
+      ansible.builtin.raw: resolvectl status 2>&1 | grep -A 5 'Link 2' | grep 'DNS Servers:' | sed 's/.*DNS Servers://' | xargs
+      register: current_dns_raw
+      changed_when: false
+      failed_when: false
+      check_mode: false
+
+    - name: Display current DNS
+      ansible.builtin.debug:
+        msg: "{{ inventory_hostname }} → Current DNS: {{ current_dns_raw.stdout | trim }}"
+
+    - name: Find netplan configuration file
+      ansible.builtin.find:
+        paths: /etc/netplan
+        patterns: "*.yaml"
+      register: netplan_files
+
+    - name: Read netplan configuration
+      ansible.builtin.slurp:
+        src: "{{ netplan_files.files[0].path }}"
+      register: netplan_content
+
+    - name: Parse and update netplan configuration
+      ansible.builtin.set_fact:
+        netplan_config: "{{ netplan_content.content | b64decode | from_yaml }}"
+
+    - name: Update DNS servers in netplan config
+      ansible.builtin.set_fact:
+        netplan_config: "{{ netplan_config | combine({'network': {'ethernets': {'eth0': {'nameservers': {'addresses': dns_servers}}}}}, recursive=True) }}"
+
+    - name: Check if DNS needs update
+      ansible.builtin.set_fact:
+        dns_needs_update: "{{ (current_dns_raw.stdout | trim).split() | sort != dns_servers | sort }}"
+
+    - name: Write updated netplan configuration
+      ansible.builtin.copy:
+        content: "{{ netplan_config | to_nice_yaml(indent=2) }}"
+        dest: "{{ netplan_files.files[0].path }}"
+        owner: root
+        group: root
+        mode: '0600'
+        backup: true
+      register: netplan_updated
+
+    - name: Clear runtime DNS overrides
+      ansible.builtin.command: resolvectl revert eth0
+      when: dns_needs_update | bool
+      changed_when: false
+      failed_when: false
+
+    - name: Apply netplan configuration
+      ansible.builtin.command: netplan apply
+      when: netplan_updated.changed or (dns_needs_update | bool)
+      changed_when: netplan_updated.changed or (dns_needs_update | bool)
+
+    - name: Restart systemd-resolved
+      ansible.builtin.systemd:
+        name: systemd-resolved
+        state: restarted
+      when: netplan_updated.changed or (dns_needs_update | bool)
+
+    - name: Wait for DNS to apply
+      ansible.builtin.pause:
+        seconds: 2
+      when: netplan_updated.changed or (dns_needs_update | bool)
+
+    - name: Get new DNS servers
+      ansible.builtin.raw: resolvectl status 2>&1 | grep -A 5 'Link 2' | grep 'DNS Servers:' | sed 's/.*DNS Servers://' | xargs
+      register: new_dns_raw
+      changed_when: false
+      failed_when: false
+      check_mode: false
+
+    - name: Display new DNS
+      ansible.builtin.debug:
+        msg: "{{ inventory_hostname }} → New DNS: {{ new_dns_raw.stdout | trim }}"

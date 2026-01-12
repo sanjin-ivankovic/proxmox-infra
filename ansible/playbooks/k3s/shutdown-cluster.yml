@@ -1,0 +1,183 @@
+---
+# playbooks/shutdown-cluster.yml
+# Gracefully shutdown K3s cluster for Proxmox maintenance
+# Run this before rebooting or updating your Proxmox host
+
+- name: Pre-shutdown validation
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: Display shutdown warning
+      ansible.builtin.pause:
+        prompt: |
+          ⚠️  WARNING: This will shut down your entire K3s cluster!
+
+          Shutdown order:
+          1. Drain and cordon all worker nodes
+          2. Drain and cordon master nodes (except first master)
+          3. Shut down worker nodes
+          4. Shut down master nodes (in reverse order)
+
+          Press Ctrl+C and then 'A' to abort, or Enter to continue...
+        seconds: 10
+
+# Step 1: Drain all worker nodes (move pods to other workers/masters)
+- name: Drain worker nodes
+  hosts: "{{ groups['masters'][0] }}" # noqa: syntax-check[specific]
+  gather_facts: false
+  tasks:
+    - name: Cordon and drain each worker node
+      ansible.builtin.shell: |
+        kubectl cordon {{ item }}
+        kubectl drain {{ item }} \
+          --ignore-daemonsets \
+          --delete-emptydir-data \
+          --force \
+          --grace-period=30 \
+          --timeout=5m || true
+      loop: "{{ groups['workers'] }}"
+      environment:
+        KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+      changed_when: true
+      failed_when: false
+
+    - name: Wait for pods to migrate from workers
+      ansible.builtin.pause:
+        seconds: 30
+        prompt: "Waiting for pods to migrate from workers..."
+
+# Step 1b: Drain master nodes (except first master which runs kubectl)
+- name: Drain master nodes
+  hosts: "{{ groups['masters'][0] }}" # noqa: syntax-check[specific]
+  gather_facts: false
+  tasks:
+    - name: Cordon and drain each master node (except first)
+      ansible.builtin.shell: |
+        kubectl cordon {{ item }}
+        kubectl drain {{ item }} \
+          --ignore-daemonsets \
+          --delete-emptydir-data \
+          --force \
+          --grace-period=30 \
+          --timeout=5m || true
+      loop: "{{ groups['masters'][1:] }}"
+      environment:
+        KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+      changed_when: true
+      failed_when: false
+      when: groups['masters'] | length > 1
+
+    - name: Wait for pods to migrate from masters
+      ansible.builtin.pause:
+        seconds: 30
+        prompt: "Waiting for pods to migrate from masters..."
+      when: groups['masters'] | length > 1
+
+# Step 2: Stop K3s service on worker nodes
+- name: Stop K3s agent on workers
+  hosts: workers
+  become: true
+  remote_user: maintainer # Use non-root user (root login disabled after bootstrap)
+  serial: 1
+  tasks:
+    - name: Stop K3s agent service
+      ansible.builtin.systemd:
+        name: k3s-agent
+        state: stopped
+      failed_when: false
+
+    - name: Kill remaining K3s processes
+      ansible.builtin.command: /usr/local/bin/k3s-killall.sh
+      changed_when: true
+      failed_when: false
+
+    - name: Wait for clean shutdown
+      ansible.builtin.pause:
+        seconds: 5
+
+# Step 3: Stop K3s service on master nodes (reverse order)
+- name: Stop K3s server on masters
+  hosts: masters
+  become: true
+  remote_user: maintainer # Use non-root user (root login disabled after bootstrap)
+  serial: 1
+  order: reverse_sorted
+  tasks:
+    - name: Stop K3s server service
+      ansible.builtin.systemd:
+        name: k3s
+        state: stopped
+      failed_when: false
+
+    - name: Kill remaining K3s processes
+      ansible.builtin.command: /usr/local/bin/k3s-killall.sh
+      changed_when: true
+      failed_when: false
+
+    - name: Wait for clean shutdown
+      ansible.builtin.pause:
+        seconds: 5
+
+# Step 4: Shutdown worker nodes
+- name: Shutdown worker nodes
+  hosts: workers
+  become: true
+  remote_user: maintainer # Use non-root user (root login disabled after bootstrap)
+  serial: 1
+  tasks:
+    - name: Sync filesystems
+      ansible.builtin.command: sync
+      changed_when: true
+
+    - name: Shutdown worker node
+      community.general.shutdown:
+        delay: 1
+      ignore_unreachable: true
+
+    - name: Wait between worker shutdowns
+      ansible.builtin.pause:
+        seconds: 10
+      delegate_to: localhost
+
+# Step 5: Shutdown master nodes (reverse order to shutdown first master last)
+- name: Shutdown master nodes
+  hosts: masters
+  become: true
+  remote_user: maintainer # Use non-root user (root login disabled after bootstrap)
+  serial: 1
+  order: reverse_sorted
+  tasks:
+    - name: Sync filesystems
+      ansible.builtin.command: sync
+      changed_when: true
+
+    - name: Shutdown master node
+      community.general.shutdown:
+        delay: 1
+      ignore_unreachable: true
+
+    - name: Wait between master shutdowns
+      ansible.builtin.pause:
+        seconds: 10
+      delegate_to: localhost
+
+# Final summary
+- name: Shutdown complete
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: Display completion message
+      ansible.builtin.debug:
+        msg: |
+          ✅ K3s cluster shutdown complete!
+
+          All nodes have been gracefully shut down.
+          You can now safely:
+          - Reboot your Proxmox server
+          - Perform Proxmox updates
+          - Perform hardware maintenance
+
+          To start the cluster again after Proxmox comes back up:
+          1. Start all VMs in Proxmox UI
+          2. Wait 2-3 minutes for VMs to boot
+          3. Run: ansible-playbook playbooks/verify-cluster.yml

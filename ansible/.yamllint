@@ -1,0 +1,72 @@
+---
+# YAML Lint configuration for Ansible playbooks
+# Documentation: https://yamllint.readthedocs.io/
+
+extends: default
+
+rules:
+  # Line length (relaxed for Ansible)
+  line-length:
+    max: 160
+    level: warning
+
+  # Indentation (2 spaces, consistent with Ansible)
+  indentation:
+    spaces: 2
+    indent-sequences: true
+    check-multi-line-strings: false
+
+  # Comments (require space after #)
+  comments:
+    min-spaces-from-content: 1
+
+  # Comments indentation (required by ansible-lint)
+  comments-indentation: false
+
+  # Trailing spaces
+  trailing-spaces: enable
+
+  # New line at end of file
+  new-line-at-end-of-file: enable
+
+  # Document start (---) - relaxed
+  document-start:
+    present: true
+    level: warning
+
+  # Truthy values (yes/no, true/false, on/off)
+  truthy:
+    allowed-values: ['true', 'false', 'yes', 'no']
+    check-keys: false
+
+  # Brackets (lists)
+  brackets:
+    min-spaces-inside: 0
+    max-spaces-inside: 0
+
+  # Braces (dictionaries)
+  braces:
+    min-spaces-inside: 0
+    max-spaces-inside: 1
+
+  # Empty lines
+  empty-lines:
+    max: 2
+
+  # Key duplicates
+  key-duplicates: enable
+
+  # Octal values (e.g., file permissions)
+  # ansible-lint requires forbid-explicit-octal: true
+  octal-values:
+    forbid-implicit-octal: true
+    forbid-explicit-octal: true
+
+# Ignore paths
+ignore: |
+  .ansible/
+  .ansible_facts/
+  inventory/terraform.yml
+  generated/
+  .cache/
+  .git/
