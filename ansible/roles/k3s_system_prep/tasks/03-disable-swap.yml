@@ -1,0 +1,38 @@
+---
+# roles/k3s_system_prep/tasks/03-disable-swap.yml
+
+# Assert that the host has at least 1GB RAM, which is required for K3s
+- name: Assert minimum RAM is available
+  ansible.builtin.assert:
+    that:
+      - ansible_memtotal_mb >= 1024
+    fail_msg: 'At least 1GB RAM is required for K3s. This host has only {{ ansible_memtotal_mb }}MB.'
+
+# Assert that the OS family is supported (Debian/Ubuntu only for this role)
+- name: Assert supported OS family
+  ansible.builtin.assert:
+    that:
+      - ansible_os_family in ['Debian', 'Ubuntu']
+    fail_msg: 'This role only supports Debian/Ubuntu OS families. Detected: {{ ansible_os_family }}.'
+
+# Check if any swap partitions are currently active on the system
+- name: Check if swap is enabled
+  ansible.builtin.command: swapon --show
+  register: k3s_system_prep_swap_status
+  changed_when: false
+  check_mode: false
+
+# Disable all swap on the system if enabled (required for Kubernetes)
+- name: Ensure all swap is disabled
+  ansible.builtin.command: swapoff -a
+  when: k3s_system_prep_disable_swap | default(true) | bool
+  changed_when: false
+
+# Remove or comment out swap entries in /etc/fstab to prevent swap from being re-enabled on reboot
+- name: Comment out swap entries in /etc/fstab
+  ansible.builtin.lineinfile:
+    path: /etc/fstab
+    regexp: '^([^#].*\sswap\s)'
+    state: absent
+    backrefs: true
+  when: k3s_system_prep_disable_swap | default(true) | bool

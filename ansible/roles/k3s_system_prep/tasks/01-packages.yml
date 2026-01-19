@@ -1,0 +1,17 @@
+---
+# roles/k3s_system_prep/tasks/01-packages.yml
+
+# Ensure the 'k3s_system_prep_packages' variable is defined as a list for package installation
+- name: Assert k3s_system_prep_packages is a list
+  ansible.builtin.assert:
+    that:
+      - k3s_system_prep_packages is defined
+      - k3s_system_prep_packages is iterable
+    fail_msg: 'k3s_system_prep_packages must be defined as a list in defaults/main.yml.'
+
+# Install all required packages listed in 'k3s_system_prep_packages' for Debian/Ubuntu systems
+- name: Ensure required packages are installed
+  ansible.builtin.package:
+    name: '{{ k3s_system_prep_packages }}'
+    state: present
+  when: ansible_os_family in ["Debian", "Ubuntu"]

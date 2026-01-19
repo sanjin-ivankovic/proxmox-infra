@@ -1,0 +1,8 @@
+---
+# Paperless-NGX Service Metadata
+# This file is used by the GitLab CI/CD pipeline for automated deployment
+
+# [REQUIRED] Deployment Target
+# Maps to GitLab CI secrets: ENV_PAPERLESS_NGX, HOST_PAPERLESS_NGX,
+# SSH_KEY_PAPERLESS_NGX
+target_host: paperless-ngx

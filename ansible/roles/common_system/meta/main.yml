@@ -1,0 +1,25 @@
+---
+# ansible/roles/common_system/meta/main.yml
+
+galaxy_info:
+  role_name: common_system
+  author: Maintainer Name
+  description: System preparation and package management for Debian/Ubuntu
+  license: MIT
+  min_ansible_version: '2.9'
+  platforms:
+    - name: Debian
+      versions:
+        - 'trixie'
+    - name: Ubuntu
+      versions:
+        - 'noble'
+  galaxy_tags:
+    - system
+    - setup
+    - debian
+    - ubuntu
+
+dependencies: []
+
+allow_duplicates: false

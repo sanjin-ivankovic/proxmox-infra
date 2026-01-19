@@ -1,0 +1,53 @@
+---
+# roles/k3s_cluster_cluster/tasks/01-preflight.yml
+
+# Verify system meets minimum memory requirements for K3s operation
+- name: Check system memory (>= 1 GB)
+  ansible.builtin.assert:
+    that:
+      - ansible_memtotal_mb >= 1024
+    fail_msg: 'Minimum 1 GB RAM required for K3s nodes'
+
+# Create a list of all other K3s nodes for connectivity testing
+- name: Build list of peer hosts
+  ansible.builtin.set_fact:
+    k3s_cluster_peer_hosts: >-
+      {{ (groups['masters'] + groups['workers'])
+          | difference([inventory_hostname]) }}
+
+# Ensure SSH connectivity is available to all other cluster nodes
+- name: Verify SSH connectivity to all other nodes
+  ansible.builtin.ping:
+  loop: '{{ k3s_cluster_peer_hosts }}'
+  delegate_to: '{{ item }}'
+
+# Verify the K3s API server is responsive before adding worker nodes
+- name: Verify K3s API /ping endpoint responds
+  ansible.builtin.uri:
+    url: '{{ k3s_cluster_endpoint }}/ping'
+    method: GET
+    status_code: 200
+    validate_certs: false
+  register: k3s_cluster_api_ping
+  until: k3s_cluster_api_ping.status == 200
+  retries: 5
+  delay: 5
+  when: "'workers' in group_names"
+
+# Check if K3s binary is already installed on worker nodes
+- name: Stat K3s binary on worker
+  ansible.builtin.stat:
+    path: /usr/local/bin/k3s
+  register: k3s_cluster_bin
+  when: "'workers' in group_names"
+
+# Check that the required agent port is available before installation
+- name: Ensure K3s agent port is not already in use
+  ansible.builtin.wait_for:
+    host: 127.0.0.1
+    port: 10250
+    state: stopped
+    timeout: 1
+  when:
+    - "'workers' in group_names"
+    - not k3s_cluster_bin.stat.exists

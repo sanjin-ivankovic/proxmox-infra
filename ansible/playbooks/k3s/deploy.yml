@@ -1,0 +1,10 @@
+---
+# playbooks/deploy.yml
+# Main playbook for K3s cluster deployment
+
+# Bootstrap K3s cluster (masters first, then workers)
+- name: Bootstrap K3s cluster
+  import_playbook: bootstrap-cluster.yml
+
+# Note: K3s updates are run separately via update-cluster.yml
+# Note: Applications are deployed via ArgoCD GitOps, not Ansible

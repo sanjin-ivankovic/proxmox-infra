@@ -1,0 +1,163 @@
+---
+# playbooks/verify-cluster.yml
+# Verify K3s cluster health after maintenance/reboot
+
+- name: Wait for all nodes to be accessible
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Wait for SSH to be available
+      ansible.builtin.wait_for_connection:
+        timeout: 300
+        delay: 10
+
+    - name: Gather facts after connection
+      ansible.builtin.setup:
+
+- name: Verify master nodes are running K3s
+  hosts: masters
+  become: true
+  remote_user: maintainer  # Use non-root user (root login disabled after bootstrap)
+  tasks:
+    - name: Check K3s service status
+      ansible.builtin.systemd:
+        name: k3s
+      register: k3s_cluster_status
+
+    - name: Display K3s status
+      ansible.builtin.debug:
+        msg: "K3s service on {{ inventory_hostname }}: {{ k3s_cluster_status.status.ActiveState }}"
+
+    - name: Verify K3s is active
+      ansible.builtin.assert:
+        that:
+          - k3s_cluster_status.status.ActiveState == "active"
+        fail_msg: "K3s service is not active on {{ inventory_hostname }}"
+        success_msg: "K3s service is running on {{ inventory_hostname }}"
+
+- name: Verify worker nodes are running K3s agent
+  hosts: workers
+  become: true
+  remote_user: maintainer  # Use non-root user (root login disabled after bootstrap)
+  tasks:
+    - name: Check K3s agent service status
+      ansible.builtin.systemd:
+        name: k3s-agent
+      register: k3s_cluster_agent_status
+
+    - name: Display K3s agent status
+      ansible.builtin.debug:
+        msg: "K3s agent service on {{ inventory_hostname }}: {{ k3s_cluster_agent_status.status.ActiveState }}"
+
+    - name: Verify K3s agent is active
+      ansible.builtin.assert:
+        that:
+          - k3s_cluster_agent_status.status.ActiveState == "active"
+        fail_msg: "K3s agent service is not active on {{ inventory_hostname }}"
+        success_msg: "K3s agent service is running on {{ inventory_hostname }}"
+
+- name: Verify cluster health from first master
+  hosts: "{{ groups['masters'][0] }}"  # noqa: syntax-check[specific]
+  become: true
+  remote_user: maintainer  # Use non-root user (root login disabled after bootstrap)
+  tasks:
+    - name: Wait for API server to be responsive
+      ansible.builtin.wait_for:
+        port: 6443
+        host: "{{ ansible_host }}"
+        timeout: 300
+        delay: 10
+
+    - name: Get all nodes status
+      ansible.builtin.command: kubectl get nodes -o wide
+      environment:
+        KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+      register: nodes_status
+      changed_when: false
+
+    - name: Display nodes status
+      ansible.builtin.debug:
+        var: nodes_status.stdout_lines
+
+    - name: Check if all nodes are Ready
+      ansible.builtin.shell: |
+        set -o pipefail
+        kubectl get nodes --no-headers | grep -v " Ready " | wc -l || echo "0"
+      args:
+        executable: /bin/bash
+      environment:
+        KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+      register: not_ready_count
+      changed_when: false
+      failed_when: false
+
+    - name: Verify all nodes are Ready
+      ansible.builtin.assert:
+        that:
+          - not_ready_count.stdout | int == 0
+        fail_msg: "Some nodes are not Ready. Check 'kubectl get nodes' for details."
+        success_msg: "All {{ groups['k3s_cluster'] | length }} nodes are Ready!"
+
+    - name: Get system pods status
+      ansible.builtin.command: kubectl get pods -n kube-system -o wide
+      environment:
+        KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+      register: system_pods
+      changed_when: false
+
+    - name: Display system pods status
+      ansible.builtin.debug:
+        var: system_pods.stdout_lines
+
+    - name: Check for unhealthy system pods
+      ansible.builtin.shell: |
+        set -o pipefail
+        kubectl get pods -n kube-system --no-headers | grep -vE "(Running|Completed)" | wc -l || echo "0"
+      args:
+        executable: /bin/bash
+      environment:
+        KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+      register: unhealthy_pods
+      changed_when: false
+      failed_when: false
+
+    - name: Verify system pods are healthy
+      ansible.builtin.assert:
+        that:
+          - unhealthy_pods.stdout | int == 0
+        fail_msg: "Some kube-system pods are not healthy. Check 'kubectl get pods -n kube-system' for details."
+        success_msg: "All kube-system pods are healthy!"
+
+    - name: Get cluster info
+      ansible.builtin.command: kubectl cluster-info
+      environment:
+        KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+      register: cluster_info
+      changed_when: false
+
+    - name: Display cluster info
+      ansible.builtin.debug:
+        var: cluster_info.stdout_lines
+
+- name: Final health summary
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: Display success message
+      ansible.builtin.debug:
+        msg: |
+          ✅ K3s Cluster Health Check PASSED!
+
+          Summary:
+          - All {{ groups['masters'] | length }} master nodes are running
+          - All {{ groups['workers'] | length }} worker nodes are running
+          - All nodes are in Ready state
+          - All kube-system pods are healthy
+          - API server is responsive
+
+          Your cluster is ready for use!
+
+          Next steps:
+          - Verify your applications: kubectl get pods --all-namespaces
+          - Check ArgoCD: kubectl get applications -n argocd
+          - Monitor logs: kubectl logs -n <namespace> <pod-name>

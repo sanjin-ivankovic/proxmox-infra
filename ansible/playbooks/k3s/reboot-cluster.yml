@@ -1,0 +1,228 @@
+---
+# playbooks/reboot-cluster.yml
+# Reboot K3s cluster nodes (e.g., after kernel updates requiring restart)
+# Performs rolling reboot to maintain cluster availability
+
+- name: Pre-reboot validation
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: Display reboot warning
+      ansible.builtin.pause:
+        prompt: |
+          ⚠️  WARNING: This will reboot all K3s cluster nodes!
+
+          Reboot order (rolling):
+          1. Worker nodes (one at a time, with pod draining)
+          2. Master nodes (one at a time, reverse order)
+
+          The cluster will remain available during the process.
+
+          Press Ctrl+C and then 'A' to abort, or Enter to continue...
+        seconds: 10
+
+# Step 1: Check if reboot is required on all nodes
+- name: Check reboot status on all nodes
+  hosts: k3s_cluster
+  gather_facts: false
+  remote_user: maintainer  # Use non-root user (root login disabled after bootstrap)
+  tasks:
+    - name: Check if reboot is required
+      ansible.builtin.stat:
+        path: /var/run/reboot-required
+      register: reboot_required_file
+
+    - name: Display reboot status
+      ansible.builtin.debug:
+        msg: "{{ inventory_hostname }}: Reboot {{ 'REQUIRED' if reboot_required_file.stat.exists else 'NOT required' }}"
+
+# Step 2: Reboot worker nodes (one at a time with draining)
+- name: Reboot worker nodes
+  hosts: workers
+  become: true
+  remote_user: maintainer  # Use non-root user (root login disabled after bootstrap)
+  serial: 1
+  tasks:
+    - name: Check if reboot is required
+      ansible.builtin.stat:
+        path: /var/run/reboot-required
+      register: reboot_required
+
+    - name: Drain worker node (if reboot required)
+      ansible.builtin.shell: |
+        kubectl drain {{ inventory_hostname }} \
+          --ignore-daemonsets \
+          --delete-emptydir-data \
+          --force \
+          --grace-period=30 \
+          --timeout=5m || true
+      delegate_to: "{{ groups['masters'][0] }}"
+      environment:
+        KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+      when: reboot_required.stat.exists
+      changed_when: true
+
+    - name: Wait for pods to migrate
+      ansible.builtin.pause:
+        seconds: 15
+        prompt: "Waiting for pods to migrate from {{ inventory_hostname }}..."
+      when: reboot_required.stat.exists
+
+    - name: Reboot worker node
+      ansible.builtin.reboot:
+        reboot_timeout: 600
+        pre_reboot_delay: 5
+        post_reboot_delay: 30
+        msg: "Rebooting {{ inventory_hostname }} after system updates"
+      when: reboot_required.stat.exists
+
+    - name: Wait for node to be Ready
+      ansible.builtin.shell: |
+        set -o pipefail
+        for i in {1..30}; do
+          if kubectl get node {{ inventory_hostname }} | grep -qE " Ready[, ]"; then
+            echo "Node is Ready"
+            exit 0
+          fi
+          sleep 10
+        done
+        echo "Node did not become Ready in time"
+        exit 1
+      args:
+        executable: /bin/bash
+      delegate_to: "{{ groups['masters'][0] }}"
+      environment:
+        KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+      when: reboot_required.stat.exists
+      changed_when: false
+      retries: 3
+      delay: 10
+
+    - name: Uncordon worker node
+      ansible.builtin.command: kubectl uncordon {{ inventory_hostname }}
+      delegate_to: "{{ groups['masters'][0] }}"
+      environment:
+        KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+      when: reboot_required.stat.exists
+      changed_when: true
+
+    - name: Display worker status
+      ansible.builtin.debug:
+        msg: "{{ inventory_hostname }}: {{ 'Rebooted and uncordoned' if reboot_required.stat.exists else 'Skipped (no reboot required)' }}"
+
+# Step 3: Reboot master nodes (one at a time, reverse order)
+- name: Reboot master nodes
+  hosts: masters
+  become: true
+  remote_user: maintainer  # Use non-root user (root login disabled after bootstrap)
+  serial: 1
+  order: reverse_sorted
+  tasks:
+    - name: Check if reboot is required
+      ansible.builtin.stat:
+        path: /var/run/reboot-required
+      register: reboot_required
+
+    - name: Drain master node (if reboot required)
+      ansible.builtin.shell: |
+        kubectl drain {{ inventory_hostname }} \
+          --ignore-daemonsets \
+          --delete-emptydir-data \
+          --force \
+          --grace-period=30 \
+          --timeout=5m || true
+      delegate_to: "{{ groups['masters'][0] }}"
+      environment:
+        KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+      when:
+        - reboot_required.stat.exists
+        - inventory_hostname != groups['masters'][0]
+      changed_when: true
+
+    - name: Wait for pods to migrate from master
+      ansible.builtin.pause:
+        seconds: 15
+        prompt: "Waiting for pods to migrate from {{ inventory_hostname }}..."
+      when:
+        - reboot_required.stat.exists
+        - inventory_hostname != groups['masters'][0]
+
+    - name: Reboot master node
+      ansible.builtin.reboot:
+        reboot_timeout: 600
+        pre_reboot_delay: 5
+        post_reboot_delay: 30
+        msg: "Rebooting {{ inventory_hostname }} after system updates"
+      when: reboot_required.stat.exists
+
+    - name: Wait for K3s API server
+      ansible.builtin.wait_for:
+        port: 6443
+        host: "{{ ansible_host }}"
+        delay: 10
+        timeout: 300
+      delegate_to: localhost
+      become: false
+      when: reboot_required.stat.exists
+
+    - name: Wait for node to be Ready
+      ansible.builtin.shell: |
+        set -o pipefail
+        for i in {1..30}; do
+          if /usr/local/bin/kubectl get node {{ inventory_hostname }} --kubeconfig /etc/rancher/k3s/k3s.yaml 2>/dev/null | grep -qE " Ready[, ]"; then
+            echo "Node is Ready"
+            exit 0
+          fi
+          sleep 10
+        done
+        echo "Node did not become Ready in time"
+        exit 1
+      args:
+        executable: /bin/bash
+      when: reboot_required.stat.exists
+      changed_when: false
+      retries: 3
+      delay: 10
+
+    - name: Uncordon master node
+      ansible.builtin.command: kubectl uncordon {{ inventory_hostname }}
+      delegate_to: "{{ groups['masters'][0] }}"
+      environment:
+        KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+      when:
+        - reboot_required.stat.exists
+        - inventory_hostname != groups['masters'][0]
+      changed_when: true
+
+    - name: Display master status
+      ansible.builtin.debug:
+        msg: "{{ inventory_hostname }}: {{ 'Rebooted successfully' if reboot_required.stat.exists else 'Skipped (no reboot required)' }}"
+
+# Step 4: Final verification
+- name: Verify cluster health after reboot
+  hosts: "{{ groups['masters'][0] }}"  # noqa: syntax-check[specific]
+  gather_facts: false
+  remote_user: maintainer  # Use non-root user (root login disabled after bootstrap)
+  tasks:
+    - name: Wait for all nodes to be Ready
+      ansible.builtin.shell: |
+        set -o pipefail
+        kubectl get nodes --no-headers | grep -v " Ready " | wc -l || echo "0"
+      args:
+        executable: /bin/bash
+      environment:
+        KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+      register: not_ready_count
+      changed_when: false
+      failed_when: false
+
+    - name: Display final cluster status
+      ansible.builtin.debug:
+        msg: |
+          Cluster reboot complete!
+          All {{ groups['k3s_cluster'] | length }} nodes are {{ 'Ready' if not_ready_count.stdout | int == 0 else 'NOT READY - Check kubectl get nodes' }}
+
+    - name: Fail if nodes are not ready
+      ansible.builtin.fail:
+        msg: "Some nodes are not Ready. Run 'make verify' for details."
+      when: not_ready_count.stdout | int > 0

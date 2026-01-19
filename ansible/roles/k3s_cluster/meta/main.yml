@@ -1,0 +1,19 @@
+---
+# roles/k3s_cluster/meta/main.yml
+
+galaxy_info:
+  author: Maintainer Name
+  description: Ansible role to bootstrap and join K3s cluster nodes.
+  license: MIT
+  min_ansible_version: '2.9'
+  platforms:
+    - name: Debian
+      versions: [buster, bullseye]
+    - name: Ubuntu
+      versions: [focal, jammy]
+  galaxy_tags:
+    - k3s
+    - kubernetes
+    - bootstrap
+
+dependencies: []

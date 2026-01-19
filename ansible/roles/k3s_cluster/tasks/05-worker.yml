@@ -1,0 +1,100 @@
+---
+# roles/k3s_cluster_cluster/tasks/04-worker.yml
+
+# Download K3s install script
+- name: Download K3s install script
+  ansible.builtin.get_url:
+    url: '{{ k3s_cluster_install_script_url }}'
+    dest: /tmp/k3s-install.sh
+    mode: '0755'
+  when:
+    - k3s_cluster_token is defined
+    - not ansible_check_mode
+
+# Install K3s agent on worker nodes
+- name: Install K3s agent
+  ansible.builtin.shell: |
+    set -o pipefail
+    /tmp/k3s-install.sh agent {{ k3s_cluster_agent_extra_args }}
+  args:
+    creates: /usr/local/bin/k3s
+    executable: /bin/bash
+  register: k3s_cluster_installed
+  when:
+    - k3s_cluster_token is defined
+    - not ansible_check_mode
+  environment:
+    INSTALL_K3S_VERSION: '{{ k3s_cluster_version }}'
+    INSTALL_K3S_CHANNEL: '{{ k3s_cluster_channel }}'
+    K3S_URL: '{{ k3s_cluster_endpoint }}'
+    K3S_TOKEN: '{{ k3s_cluster_token }}'
+  failed_when:
+    - k3s_cluster_installed.rc != 0
+
+# Ensure the agent service is enabled and running
+- name: Ensure K3s agent service is enabled and running
+  ansible.builtin.service:
+    name: k3s-agent
+    state: started
+    enabled: true
+  register: k3s_cluster_agent_service
+  when: not ansible_check_mode
+  failed_when:
+    - k3s_cluster_agent_service.failed
+
+# Display logs on failure
+- name: Display K3s agent logs on failure
+  ansible.builtin.debug:
+    var: k3s_cluster_agent_logs.stdout_lines
+  when: >
+    k3s_cluster_agent_service is failed or
+    (k3s_cluster_agent_service is defined and k3s_cluster_agent_service.state is not defined) or
+    (k3s_cluster_agent_service.state is defined and k3s_cluster_agent_service.state != 'started')
+
+# Wait for the agent to register
+- name: Wait for K3s agent to register (listen on 10250)
+  ansible.builtin.wait_for:
+    host: 127.0.0.1
+    port: 10250
+    state: started
+    delay: 5
+    timeout: 120
+  register: k3s_cluster_agent_status
+  failed_when: false
+
+# Collect K3s agent logs if registration failed
+- name: Collect K3s agent logs on failure
+  ansible.builtin.command: journalctl -u k3s-agent --no-pager -n 50
+  register: k3s_cluster_agent_logs
+  when: k3s_cluster_agent_status.failed | default(false)
+  changed_when: false
+
+# Show logs on failure
+- name: Display K3s agent logs on failure
+  ansible.builtin.debug:
+    var: k3s_cluster_agent_logs.stdout_lines | default(['No logs available'])
+  when: k3s_cluster_agent_status.failed | default(false)
+
+# Fail with a helpful message if the agent never registered
+- name: Fail if K3s agent registration did not happen
+  ansible.builtin.fail:
+    msg: 'K3s agent failed to register. Inspect the logs above.'
+  when:
+    - k3s_cluster_agent_status.failed | default(false)
+    - not ansible_check_mode
+
+# Label worker nodes with the 'worker' role
+- name: Label worker nodes
+  kubernetes.core.k8s:
+    api_version: v1
+    kind: Node
+    name: '{{ item }}'
+    label_selectors: []
+    state: present
+    definition:
+      metadata:
+        labels:
+          node-role.kubernetes.io/worker: 'worker'
+  loop: "{{ groups['workers'] }}"
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
