@@ -1,0 +1,7 @@
+---
+# CheckMK Monitoring Service Metadata
+# This file is used by the GitLab CI/CD pipeline for automated deployment
+
+# [REQUIRED] Deployment Target
+# Maps to GitLab CI secrets: ENV_CHECKMK, HOST_CHECKMK, SSH_KEY_CHECKMK
+target_host: checkmk

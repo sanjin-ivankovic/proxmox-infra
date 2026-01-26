@@ -1,0 +1,61 @@
+---
+# roles/k3s_cluster_cluster/tasks/07-update.yml
+# K3s update orchestration with rolling strategy
+
+- name: Check current K3s version
+  ansible.builtin.command: /usr/local/bin/k3s --version
+  register: k3s_cluster_current_version
+  changed_when: false
+  failed_when: false
+  tags: [update]
+
+- name: Set fact for current K3s version
+  ansible.builtin.set_fact:
+    k3s_cluster_current_k3s_version: >-
+      {{
+        k3s_cluster_current_version.stdout_lines[0] |
+        regex_replace('k3s version (v[0-9.+k3s]+).*', '\1')
+      }}
+  when:
+    - k3s_cluster_current_version.rc == 0
+    - k3s_cluster_current_version.stdout_lines | length > 0
+  tags: [update]
+
+- name: Compare current version with desired version
+  ansible.builtin.set_fact:
+    k3s_cluster_needs_update: >-
+      {{
+        k3s_cluster_current_version.rc != 0 or
+        (k3s_cluster_current_k3s_version is defined and
+        k3s_cluster_current_k3s_version != k3s_cluster_version)
+      }}
+  tags: [update]
+
+- name: Display update status
+  ansible.builtin.debug:
+    msg: |
+      Current version: '{{ k3s_cluster_current_k3s_version | default('Not installed') }}'
+      Target version: '{{ k3s_cluster_version }}'
+      Needs update: {{ k3s_cluster_needs_update }}
+  tags: [update]
+
+- name: Skip update if not needed
+  ansible.builtin.debug:
+    msg: 'K3s is already at the desired version {{ k3s_cluster_version }}'
+  when: not (k3s_cluster_needs_update | bool)
+  tags: [update]
+
+# Rolling update strategy - Masters first, then workers
+- name: Update masters sequentially
+  ansible.builtin.include_tasks: 08-update-master.yml
+  when:
+    - k3s_cluster_needs_update | bool
+    - "'masters' in group_names"
+  tags: [update]
+
+- name: Update workers with draining
+  ansible.builtin.include_tasks: 09-update-worker.yml
+  when:
+    - k3s_cluster_needs_update | bool
+    - "'workers' in group_names"
+  tags: [update]

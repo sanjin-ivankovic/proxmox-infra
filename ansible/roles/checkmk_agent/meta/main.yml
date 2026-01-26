@@ -1,0 +1,25 @@
+---
+# ansible/roles/checkmk_agent/meta/main.yml
+# Role metadata
+
+galaxy_info:
+  author: Maintainer
+  description: Install and configure CheckMK monitoring agent
+  company: Homelab
+  license: MIT
+  min_ansible_version: '2.9'
+  platforms:
+    - name: Debian
+      versions:
+        - bullseye
+        - bookworm
+    - name: Ubuntu
+      versions:
+        - focal
+        - jammy
+  galaxy_tags:
+    - monitoring
+    - checkmk
+    - observability
+
+dependencies: []

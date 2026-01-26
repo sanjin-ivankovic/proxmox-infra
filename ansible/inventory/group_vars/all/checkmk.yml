@@ -1,0 +1,20 @@
+---
+# ansible/inventory/group_vars/all/checkmk.yml
+# CheckMK global configuration
+
+# CheckMK server details
+checkmk_agent_server_host: "10.40.0.14"
+checkmk_agent_server_fqdn: "checkmk.example.com"
+checkmk_agent_server_port: "8000"
+checkmk_agent_site_id: "cmk"
+
+# Agent configuration
+checkmk_agent_enable_tls: true
+checkmk_agent_trust_cert: true
+
+# Docker monitoring (auto-detected per host)
+checkmk_agent_enable_docker_monitoring: true
+
+# Admin credentials (stored in vault)
+checkmk_agent_admin_user: "cmkadmin"
+# checkmk_agent_admin_password is defined in vault.yml

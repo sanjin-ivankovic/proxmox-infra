@@ -1,0 +1,441 @@
+---
+# ============================================================================
+# Rolling Reboot K3s Cluster (Three-Tier Architecture Aware)
+# ============================================================================
+# This playbook performs a rolling reboot of the K3s cluster with awareness
+# of the three-tier architecture. Nodes are rebooted one at a time per tier
+# to maintain cluster availability.
+#
+# Reboot strategy:
+#   1. Check which nodes need reboot (/var/run/reboot-required)
+#   2. Reboot stateless tier nodes one at a time (workers 2-3)
+#   3. Reboot stateful tier node (worker-1)
+#   4. Reboot infrastructure tier nodes one at a time (masters)
+#   5. Verify all nodes return to Ready state
+#
+# Usage:
+#   cd /home/user/projects/proxmox-infra/ansible
+#   ansible-playbook -i k3s/inventory/hosts.yml \
+#                    -i k3s/inventory/workload-tiers.yml \
+#                    playbooks/k3s/reboot-cluster-tiered.yml
+# ============================================================================
+
+- name: Pre-reboot validation
+  hosts: localhost
+  gather_facts: false
+  vars:
+    control_node: "{{ groups['masters'][0] }}"
+
+  tasks:
+    - name: Display reboot warning
+      ansible.builtin.pause:
+        prompt: |
+          ⚠️  WARNING: This will perform a rolling reboot of your K3s cluster!
+
+          Rolling reboot order:
+          1. Check which nodes require reboot
+          2. Reboot stateless tier (workers 2-3) one at a time
+          3. Reboot stateful tier (worker-1)
+          4. Reboot infrastructure tier (masters) one at a time
+          5. Verify all nodes return to Ready
+
+          Each node will be:
+          - Cordoned
+          - Drained (pods moved to other nodes)
+          - Rebooted
+          - Uncordoned after rejoining
+
+          Press Ctrl+C then 'A' to abort, or Enter to continue...
+        seconds: 10
+
+    - name: Verify cluster is accessible
+      ansible.builtin.command: kubectl get nodes
+      delegate_to: "{{ control_node }}"
+      environment:
+        KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+      changed_when: false
+      register: cluster_check
+      failed_when: cluster_check.rc != 0
+
+# ============================================================================
+# Phase 1: Check reboot requirements
+# ============================================================================
+- name: Check which nodes need reboot
+  hosts: all_tiers
+  gather_facts: false
+  tasks:
+    - name: Check for reboot-required flag
+      ansible.builtin.stat:
+        path: /var/run/reboot-required
+      register: reboot_required
+
+    - name: Display nodes requiring reboot
+      ansible.builtin.debug:
+        msg: "{{ inventory_hostname }} requires reboot: {{ reboot_required.stat.exists }}"
+
+- name: Summarize reboot requirements
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: List nodes requiring reboot
+      ansible.builtin.set_fact:
+        nodes_need_reboot: >
+          {{ groups['all_tiers']
+          | map('extract', hostvars)
+          | selectattr('reboot_required.stat.exists', 'equalto', true)
+          | map(attribute='inventory_hostname')
+          | list }}
+
+    - name: Display nodes needing reboot
+      ansible.builtin.debug:
+        msg: |
+          Nodes requiring reboot: {{ nodes_need_reboot | join(', ') if nodes_need_reboot | length > 0 else 'None' }}
+          Total: {{ nodes_need_reboot | length }}/{{ groups['all_tiers'] | length }} nodes
+
+    - name: Abort if no nodes need reboot
+      ansible.builtin.meta: end_play
+      when: nodes_need_reboot | length == 0
+
+# ============================================================================
+# Phase 2: Reboot Stateless Tier (workers 2-3)
+# ============================================================================
+- name: Rolling reboot stateless tier
+  hosts: stateless_tier
+  become: true
+  serial: 1
+  vars:
+    control_node: "{{ groups['masters'][0] }}"
+  tasks:
+    - name: Check if this node needs reboot
+      ansible.builtin.set_fact:
+        needs_reboot: "{{ hostvars[inventory_hostname].reboot_required.stat.exists }}"
+
+    - name: Skip node if reboot not needed
+      ansible.builtin.meta: end_host
+      when: not needs_reboot
+
+    - name: Cordon node before reboot
+      ansible.builtin.command: kubectl cordon {{ inventory_hostname }}
+      delegate_to: "{{ control_node }}"
+      environment:
+        KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+      changed_when: true
+
+    - name: Drain node (stateless - safe to move pods)
+      ansible.builtin.command: >
+        kubectl drain {{ inventory_hostname }}
+        --ignore-daemonsets
+        --delete-emptydir-data
+        --grace-period=60
+        --timeout=10m
+      delegate_to: "{{ control_node }}"
+      environment:
+        KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+      changed_when: true
+      register: drain_result
+      failed_when: drain_result.rc != 0
+
+    - name: Reboot stateless node
+      ansible.builtin.reboot:
+        reboot_timeout: 600
+        post_reboot_delay: 30
+        msg: "Rebooting {{ inventory_hostname }} (stateless tier) for system updates"
+
+    - name: Wait for node to rejoin cluster
+      ansible.builtin.command: kubectl get node {{ inventory_hostname }}
+      delegate_to: "{{ control_node }}"
+      environment:
+        KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+      register: node_status
+      until: node_status.rc == 0
+      retries: 30
+      delay: 10
+      changed_when: false
+
+    - name: Wait for node to become Ready
+      ansible.builtin.shell: |
+        kubectl get node {{ inventory_hostname }} -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}'
+      delegate_to: "{{ control_node }}"
+      environment:
+        KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+      register: node_ready
+      until: node_ready.stdout == 'True'
+      retries: 20
+      delay: 10
+      changed_when: false
+
+    - name: Uncordon node
+      ansible.builtin.command: kubectl uncordon {{ inventory_hostname }}
+      delegate_to: "{{ control_node }}"
+      environment:
+        KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+      changed_when: true
+
+    - name: Wait for pods to reschedule
+      ansible.builtin.pause:
+        seconds: 30
+        prompt: "Node {{ inventory_hostname }} rebooted and rejoined. Waiting for pods to reschedule..."
+
+# ============================================================================
+# Phase 3: Reboot Stateful Tier (worker-1)
+# ============================================================================
+- name: Rolling reboot stateful tier
+  hosts: stateful_tier
+  become: true
+  serial: 1
+  vars:
+    control_node: "{{ groups['masters'][0] }}"
+  tasks:
+    - name: Check if this node needs reboot
+      ansible.builtin.set_fact:
+        needs_reboot: "{{ hostvars[inventory_hostname].reboot_required.stat.exists }}"
+
+    - name: Skip node if reboot not needed
+      ansible.builtin.meta: end_host
+      when: not needs_reboot
+
+    - name: Check for pods with PVCs before draining
+      ansible.builtin.shell: |
+        set -o pipefail
+        kubectl get pods -A -o json | \
+        jq -r '.items[] |
+        select(.spec.nodeName=="{{ inventory_hostname }}") |
+        select(.spec.volumes[]?.persistentVolumeClaim) |
+        "\(.metadata.namespace)/\(.metadata.name)"'
+      args:
+        executable: /bin/bash
+      delegate_to: "{{ control_node }}"
+      environment:
+        KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+      register: pods_with_pvcs
+      changed_when: false
+
+    - name: Display warning about stateful pods
+      ansible.builtin.debug:
+        msg: |
+          WARNING: Found {{ pods_with_pvcs.stdout_lines | length }} pods with PVCs on {{ inventory_hostname }}:
+          {{ pods_with_pvcs.stdout_lines }}
+          These pods will be temporarily unavailable during reboot.
+      when: pods_with_pvcs.stdout_lines | length > 0
+
+    - name: Cordon node before reboot
+      ansible.builtin.command: kubectl cordon {{ inventory_hostname }}
+      delegate_to: "{{ control_node }}"
+      environment:
+        KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+      changed_when: true
+
+    - name: Drain node (stateful - some pods may not reschedule)
+      ansible.builtin.command: >
+        kubectl drain {{ inventory_hostname }}
+        --ignore-daemonsets
+        --delete-emptydir-data
+        --grace-period=120
+        --timeout=15m
+        --disable-eviction
+        --force
+      delegate_to: "{{ control_node }}"
+      environment:
+        KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+      changed_when: true
+      register: drain_result
+      failed_when: false # Allow partial drain for pods with PVCs
+
+    - name: Reboot stateful node
+      ansible.builtin.reboot:
+        reboot_timeout: 600
+        post_reboot_delay: 60
+        msg: "Rebooting {{ inventory_hostname }} (stateful tier) for system updates"
+
+    - name: Wait for node to rejoin cluster
+      ansible.builtin.command: kubectl get node {{ inventory_hostname }}
+      delegate_to: "{{ control_node }}"
+      environment:
+        KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+      register: node_status
+      until: node_status.rc == 0
+      retries: 30
+      delay: 10
+      changed_when: false
+
+    - name: Wait for node to become Ready
+      ansible.builtin.shell: |
+        kubectl get node {{ inventory_hostname }} -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}'
+      delegate_to: "{{ control_node }}"
+      environment:
+        KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+      register: node_ready
+      until: node_ready.stdout == 'True'
+      retries: 20
+      delay: 10
+      changed_when: false
+
+    - name: Uncordon node
+      ansible.builtin.command: kubectl uncordon {{ inventory_hostname }}
+      delegate_to: "{{ control_node }}"
+      environment:
+        KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+      changed_when: true
+
+    - name: Wait for stateful pods to reschedule
+      ansible.builtin.pause:
+        seconds: 60
+        prompt: "Node {{ inventory_hostname }} rebooted. Waiting for stateful pods to reschedule..."
+
+# ============================================================================
+# Phase 4: Reboot Infrastructure Tier (masters)
+# ============================================================================
+- name: Rolling reboot infrastructure tier
+  hosts: infrastructure_tier
+  become: true
+  serial: 1
+  vars:
+    control_node: "{{ groups['masters'][0] }}"
+  tasks:
+    - name: Check if this node needs reboot
+      ansible.builtin.set_fact:
+        needs_reboot: "{{ hostvars[inventory_hostname].reboot_required.stat.exists }}"
+
+    - name: Skip node if reboot not needed
+      ansible.builtin.meta: end_host
+      when: not needs_reboot
+
+    - name: Determine if this is the control node
+      ansible.builtin.set_fact:
+        is_control_node: "{{ inventory_hostname == control_node }}"
+
+    # For non-control masters, drain normally
+    - name: Drain non-control master nodes
+      when: not is_control_node
+      block:
+        - name: Cordon master node before reboot
+          ansible.builtin.command: kubectl cordon {{ inventory_hostname }}
+          delegate_to: "{{ control_node }}"
+          environment:
+            KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+          changed_when: true
+
+        - name: Drain master node (infrastructure pods move to other masters)
+          ansible.builtin.command: >
+            kubectl drain {{ inventory_hostname }}
+            --ignore-daemonsets
+            --delete-emptydir-data
+            --grace-period=60
+            --timeout=10m
+          delegate_to: "{{ control_node }}"
+          environment:
+            KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+          changed_when: true
+          register: drain_result
+          failed_when: drain_result.rc != 0
+
+    - name: Reboot master node
+      ansible.builtin.reboot:
+        reboot_timeout: 600
+        post_reboot_delay: 60
+        msg: "Rebooting {{ inventory_hostname }} (infrastructure tier) for system updates"
+
+    - name: Wait for master node to rejoin cluster
+      ansible.builtin.command: kubectl get node {{ inventory_hostname }}
+      delegate_to: "{{ control_node if not is_control_node else groups['masters'][1] }}"
+      environment:
+        KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+      register: node_status
+      until: node_status.rc == 0
+      retries: 30
+      delay: 10
+      changed_when: false
+
+    - name: Wait for master node to become Ready
+      ansible.builtin.shell: |
+        kubectl get node {{ inventory_hostname }} -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}'
+      delegate_to: "{{ control_node if not is_control_node else groups['masters'][1] }}"
+      environment:
+        KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+      register: node_ready
+      until: node_ready.stdout == 'True'
+      retries: 20
+      delay: 10
+      changed_when: false
+
+    - name: Uncordon master node
+      ansible.builtin.command: kubectl uncordon {{ inventory_hostname }}
+      delegate_to: "{{ control_node if not is_control_node else groups['masters'][1] }}"
+      environment:
+        KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+      changed_when: true
+      when: not is_control_node
+
+    - name: Wait for infrastructure pods to reschedule
+      ansible.builtin.pause:
+        seconds: 45
+        prompt: "Master {{ inventory_hostname }} rebooted. Waiting for infrastructure pods to reschedule..."
+
+# ============================================================================
+# Phase 5: Final verification
+# ============================================================================
+- name: Verify cluster health after reboot
+  hosts: localhost
+  gather_facts: false
+  vars:
+    control_node: "{{ groups['masters'][0] }}"
+  tasks:
+    - name: Get all node statuses
+      ansible.builtin.command: kubectl get nodes -o wide
+      delegate_to: "{{ control_node }}"
+      environment:
+        KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+      register: final_nodes
+      changed_when: false
+
+    - name: Display final node status
+      ansible.builtin.debug:
+        msg: "{{ final_nodes.stdout_lines }}"
+
+    - name: Check for NotReady nodes
+      ansible.builtin.shell: |
+        set -o pipefail
+        kubectl get nodes -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.status.conditions[?(@.type=="Ready")].status}{"\n"}{end}' |
+        grep -v True || true
+      delegate_to: "{{ control_node }}"
+      environment:
+        KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+      register: notready_nodes
+      changed_when: false
+
+    - name: Warn about NotReady nodes
+      ansible.builtin.debug:
+        msg: |
+          WARNING: Some nodes are not Ready:
+          {{ notready_nodes.stdout_lines }}
+      when: notready_nodes.stdout != ''
+
+    - name: Check for pending pods
+      ansible.builtin.command: kubectl get pods -A --field-selector=status.phase=Pending
+      delegate_to: "{{ control_node }}"
+      environment:
+        KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+      register: pending_pods
+      changed_when: false
+      failed_when: false
+
+    - name: Display pending pods if any
+      ansible.builtin.debug:
+        msg: |
+          Pending pods found (may be expected for stateful workloads):
+          {{ pending_pods.stdout_lines }}
+      when: pending_pods.stdout_lines | length > 1 # Header line always present
+
+    - name: Reboot summary
+      ansible.builtin.debug:
+        msg: |
+          ✓ Rolling reboot complete!
+
+          Nodes rebooted: {{ nodes_need_reboot | join(', ') }}
+          Total nodes: {{ groups['all_tiers'] | length }}
+
+          Next steps:
+          1. Verify all applications are healthy: kubectl get pods -A
+          2. Check for pending pods: kubectl get pods -A | grep Pending
+          3. Sync applications in ArgoCD if needed: https://argo.example.com
+          4. Monitor cluster for 30 minutes to ensure stability

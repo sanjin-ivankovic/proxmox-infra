@@ -1,0 +1,55 @@
+---
+# Semaphore CI/CD Service
+# Ansible-driven continuous deployment and infrastructure automation
+#
+# Deployment: Auto-deployed via GitLab CI/CD on push to main
+# URL: http://<host-ip>:3000
+# Default credentials: admin / (set in .env)
+
+name: semaphore
+
+services:
+  semaphore:
+    container_name: semaphore
+    image: semaphoreui/semaphore:v2.16.51@sha256:316520f513e3c964d23cdd40709777a6a452e275020627aba406e9bd9c08adde
+    ports:
+      - 3000:3000
+    environment:
+      SEMAPHORE_DB_DIALECT: sqlite
+      SEMAPHORE_ADMIN: ${SEMAPHORE_ADMIN}
+      SEMAPHORE_ADMIN_PASSWORD: ${SEMAPHORE_ADMIN_PASSWORD}
+      SEMAPHORE_ADMIN_NAME: ${SEMAPHORE_ADMIN_NAME}
+      SEMAPHORE_ADMIN_EMAIL: ${SEMAPHORE_ADMIN_EMAIL}
+    volumes:
+      - semaphore_data:/var/lib/semaphore
+      - semaphore_config:/etc/semaphore
+    networks:
+      - semaphore_network
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'wget',
+          '--quiet',
+          '--tries=1',
+          '--spider',
+          'http://localhost:3000/api/ping',
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+volumes:
+  semaphore_data:
+    external: true
+  semaphore_config:
+    external: true
+
+networks:
+  semaphore_network:
+    name: semaphore_network
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16

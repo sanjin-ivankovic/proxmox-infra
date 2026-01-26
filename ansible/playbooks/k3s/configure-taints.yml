@@ -1,0 +1,168 @@
+---
+# playbooks/k3s/configure-taints.yml
+# Apply only labels and taints to existing K3s cluster nodes
+#
+# This playbook configures the three-tier workload architecture without
+# reinstalling K3s. Use this to restore taints/labels after a cluster restore.
+#
+# Usage:
+#   ansible-playbook -i k3s/inventory/hosts.yml playbooks/k3s/configure-taints.yml
+
+- name: Apply Workload Tier Configuration (Labels and Taints Only)
+  hosts: localhost
+  gather_facts: false
+  vars:
+    control_node: "{{ groups['masters'][0] }}"
+
+  tasks:
+    - name: Verify K3s cluster is accessible
+      ansible.builtin.command: kubectl get nodes
+      delegate_to: '{{ control_node }}'
+      environment:
+        KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+      changed_when: false
+      register: cluster_check
+      retries: 5
+      delay: 5
+      until: cluster_check.rc == 0
+
+    - name: Display current node status
+      ansible.builtin.command: >-
+        kubectl get nodes -o custom-columns=NAME:.metadata.name,TIER:.metadata.labels.workload-tier,TAINTS:.spec.taints[*].key
+      delegate_to: '{{ control_node }}'
+      environment:
+        KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+      changed_when: false
+      register: current_status
+
+    - name: Show current configuration
+      ansible.builtin.debug:
+        msg: '{{ current_status.stdout_lines }}'
+
+    # ========================================================================
+    # Infrastructure Tier - Label Masters
+    # ========================================================================
+    - name: Label master nodes with infrastructure tier
+      kubernetes.core.k8s:
+        api_version: v1
+        kind: Node
+        name: '{{ item }}'
+        state: present
+        definition:
+          metadata:
+            labels:
+              workload-tier: infrastructure
+      loop: "{{ groups['masters'] }}"
+      delegate_to: '{{ control_node }}'
+
+    - name: Apply control-plane taint to master nodes (prevent workload scheduling)
+      ansible.builtin.command: >
+        kubectl taint nodes {{ item }}
+        node-role.kubernetes.io/control-plane=true:NoSchedule
+        --overwrite
+      loop: "{{ groups['masters'] }}"
+      delegate_to: '{{ control_node }}'
+      environment:
+        KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+      register: taint_masters
+      changed_when: "'tainted' in taint_masters.stdout or 'updated' in taint_masters.stdout"
+      failed_when: >
+        taint_masters.rc != 0 and
+        'already has' not in taint_masters.stderr
+
+    # ========================================================================
+    # Stateful Tier - Label and Taint worker-1
+    # ========================================================================
+    - name: Label stateful tier node (worker-1)
+      kubernetes.core.k8s:
+        api_version: v1
+        kind: Node
+        name: "{{ groups['workers'][0] }}"
+        state: present
+        definition:
+          metadata:
+            labels:
+              workload-tier: stateful
+      delegate_to: '{{ control_node }}'
+
+    - name: Apply taint to stateful tier node
+      ansible.builtin.command: >
+        kubectl taint nodes {{ groups['workers'][0] }}
+        workload-type=stateful:NoSchedule
+        --overwrite
+      delegate_to: '{{ control_node }}'
+      environment:
+        KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+      register: taint_stateful
+      changed_when: "'tainted' in taint_stateful.stdout or 'updated' in taint_stateful.stdout"
+      failed_when: >
+        taint_stateful.rc != 0 and
+        'already has' not in taint_stateful.stderr
+
+    # ========================================================================
+    # Stateless Tier - Label and Taint workers 2-3
+    # ========================================================================
+    - name: Label stateless tier nodes (workers 2-3)
+      kubernetes.core.k8s:
+        api_version: v1
+        kind: Node
+        name: '{{ item }}'
+        state: present
+        definition:
+          metadata:
+            labels:
+              workload-tier: stateless
+      loop: "{{ groups['workers'][1:] }}"
+      delegate_to: '{{ control_node }}'
+
+    - name: Apply taint to stateless tier nodes
+      ansible.builtin.command: >
+        kubectl taint nodes {{ item }}
+        workload-type=stateless:NoSchedule
+        --overwrite
+      loop: "{{ groups['workers'][1:] }}"
+      delegate_to: '{{ control_node }}'
+      environment:
+        KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+      register: taint_stateless
+      changed_when: "'tainted' in taint_stateless.stdout or 'updated' in taint_stateless.stdout"
+      failed_when: >
+        taint_stateless.rc != 0 and
+        'already has' not in taint_stateless.stderr
+
+    # ========================================================================
+    # Verification
+    # ========================================================================
+    - name: Display updated node labels and taints
+      ansible.builtin.command: >-
+        kubectl get nodes -o custom-columns=NAME:.metadata.name,TIER:.metadata.labels.workload-tier,TAINTS:.spec.taints[*].key
+      delegate_to: '{{ control_node }}'
+      environment:
+        KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+      changed_when: false
+      register: node_status
+
+    - name: Show updated tier configuration
+      ansible.builtin.debug:
+        msg: '{{ node_status.stdout_lines }}'
+
+    - name: Configuration complete summary
+      ansible.builtin.debug:
+        msg: |
+          ✓ Workload tier configuration applied successfully!
+
+          Infrastructure tier (masters): {{ groups['masters'] | join(', ') }}
+            - Label: workload-tier=infrastructure
+            - Taint: node-role.kubernetes.io/control-plane=true:NoSchedule
+
+          Stateful tier: {{ groups['workers'][0] }}
+            - Label: workload-tier=stateful
+            - Taint: workload-type=stateful:NoSchedule
+
+          Stateless tier: {{ groups['workers'][1:] | join(', ') }}
+            - Label: workload-tier=stateless
+            - Taint: workload-type=stateless:NoSchedule
+
+          Next steps:
+          1. Verify pods are scheduling correctly: kubectl get pods -A -o wide
+          2. Check for any pending pods: kubectl get pods -A | grep Pending

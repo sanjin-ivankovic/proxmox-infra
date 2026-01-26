@@ -1,0 +1,45 @@
+---
+# AdGuard Home DNS Server (adguard-2)
+# Secondary network-wide ad blocking and DNS server for high availability
+#
+# Deployment: Auto-deployed via GitLab CI/CD on push to main
+# Web UI: http://10.10.0.13:3000 (initial setup)
+# DNS Port: 53 (TCP/UDP)
+# DoT/DoQ Port: 853 (TCP/UDP)
+# DoH Port: 443 (TCP/UDP)
+
+services:
+  # AdGuard Home - DNS AdBlocking
+  # More info at https://github.com/AdguardTeam/AdGuardHome and
+  # https://github.com/AdguardTeam/AdGuardHome/wiki/Docker
+  adguard-2:
+    container_name: adguard-2
+    hostname: adguard-2
+    image: adguard/adguardhome:v0.107.71@sha256:92929135ced2554aaf94706f766a98ad348f211df61b0704e2db7e8498cc00b7
+    network_mode: host
+    environment:
+      # You can get a list of time zone at
+      # https://en.wikipedia.org/wiki/List_of_tz_database_time_zones
+      TZ: ${TZ}
+    volumes:
+      - ${APPDATA_DIR}/adguard-2/work:/opt/adguardhome/work
+      - ${APPDATA_DIR}/adguard-2/conf:/opt/adguardhome/conf
+    restart: unless-stopped
+
+  # Unbound - Recursive DNS Resolver
+  unbound-2:
+    image: ${REGISTRY_IMAGE}/unbound:1.24.2
+    container_name: unbound-2
+    network_mode: host
+    environment:
+      TZ: ${TZ}
+    # volumes:
+    # Mount config directory (deployed via GitLab CI/CD)
+    # - ./config/unbound.conf:/opt/unbound/etc/unbound/unbound.conf:ro
+    # Additional config files can be mounted here if needed:
+    # - ./config/a-records.conf:/opt/unbound/etc/unbound/a-records.conf:ro
+    # - ./config/forward-records.conf:/opt/unbound/etc/unbound/
+    #   forward-records.conf:ro
+    # - ./config/srv-records.conf:/opt/unbound/etc/unbound/
+    #   srv-records.conf:ro
+    restart: unless-stopped

@@ -1,0 +1,41 @@
+---
+# ansible/playbooks/monitoring/deploy-checkmk-agent.yml
+# Deploy CheckMK monitoring agent to LXC containers and VMs
+
+- name: Deploy CheckMK Agent to Infrastructure
+  hosts: all
+  become: true
+  gather_facts: true
+
+  vars:
+    # Override these in inventory or command line
+    checkmk_agent_server_host: "10.40.0.14"
+    checkmk_agent_server_fqdn: "checkmk.example.com"
+    checkmk_agent_enable_docker_monitoring: true
+    checkmk_agent_enable_tls: true
+
+  pre_tasks:
+    - name: Display target hosts
+      ansible.builtin.debug:
+        msg: "Installing CheckMK agent on {{ inventory_hostname }}"
+
+    - name: Verify connectivity to CheckMK server
+      ansible.builtin.wait_for:
+        host: "{{ checkmk_agent_server_host }}"
+        port: 8080
+        timeout: 10
+      delegate_to: localhost
+      become: false
+
+  roles:
+    - role: ../../roles/checkmk_agent
+
+  post_tasks:
+    - name: Summary
+      ansible.builtin.debug:
+        msg: |
+          CheckMK agent deployment complete for {{ inventory_hostname }}
+          - Agent installed: Yes
+          - Docker monitoring: {{ checkmk_agent_enable_docker_monitoring }}
+          - TLS enabled: {{ checkmk_agent_enable_tls }}
+          - Server: {{ checkmk_agent_server_fqdn }}

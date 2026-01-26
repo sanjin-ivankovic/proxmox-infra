@@ -1,0 +1,9 @@
+# Podman Containers Configuration
+# Managed by Ansible - Do not edit manually
+
+[engine]
+cgroup_manager = "{{ common_podman_cgroup_manager }}"
+events_logger = "{{ common_podman_events_logger }}"
+
+[network]
+network_backend = "{{ common_podman_network_backend }}"

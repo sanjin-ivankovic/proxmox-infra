@@ -1,0 +1,44 @@
+---
+# ansible/roles/checkmk_agent/tasks/docker-plugin.yml
+# Install CheckMK Docker monitoring plugin
+
+- name: Check if Docker is installed
+  ansible.builtin.command: docker --version
+  register: checkmk_agent_docker_check
+  changed_when: false
+  failed_when: false
+
+- name: Create plugins directory
+  ansible.builtin.file:
+    path: /usr/lib/check_mk_agent/plugins
+    state: directory
+    mode: '0755'
+  when: checkmk_agent_docker_check.rc == 0
+
+- name: Install Docker Python library for CheckMK plugin
+  ansible.builtin.apt:
+    name: python3-docker
+    state: present
+    update_cache: false
+  when: checkmk_agent_docker_check.rc == 0
+
+- name: Download Docker monitoring plugin
+  ansible.builtin.get_url:
+    url: "https://{{ checkmk_agent_server_fqdn }}/cmk/check_mk/agents/plugins/mk_docker.py"
+    dest: /usr/lib/check_mk_agent/plugins/mk_docker.py
+    mode: '0755'
+    validate_certs: "{{ not checkmk_agent_trust_cert }}"
+  when: checkmk_agent_docker_check.rc == 0
+
+- name: Add check-mk-agent user to docker group
+  ansible.builtin.user:
+    name: check-mk-agent
+    groups: docker
+    append: true
+  when: checkmk_agent_docker_check.rc == 0
+  notify: Restart check-mk-agent
+
+- name: Display Docker plugin status
+  ansible.builtin.debug:
+    msg: "Docker monitoring plugin installed for {{ inventory_hostname }}"
+  when: checkmk_agent_docker_check.rc == 0
