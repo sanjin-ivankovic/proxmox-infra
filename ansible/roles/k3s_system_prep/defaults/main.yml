@@ -1,0 +1,75 @@
+---
+# roles/k3s_system_prep/defaults/main.yml
+
+# List of required system packages (list)
+k3s_system_prep_packages:
+  - curl
+  - iptables
+  - iproute2
+  - ca-certificates
+  - conntrack
+  - nfs-common
+  # Example: add more packages as needed
+
+# Whether to disable swap (boolean)
+k3s_system_prep_disable_swap: true # Example: true or false
+
+# Whether to reboot after kernel update (boolean)
+k3s_system_prep_reboot_after_kernel_update: true # Example: true or false
+
+# Python pip package name (string)
+k3s_system_prep_python_pip_package: python3-pip # Example: 'python3-pip'
+
+# Kubernetes Python client package (string)
+k3s_system_prep_kubernetes_client_package: 'kubernetes>=24.2.0' # Example: 'kubernetes'
+
+# Extra args for pip install (string)
+k3s_system_prep_kubernetes_client_extra_args: '--break-system-packages' # Example: '--upgrade'
+
+# Whether to configure hostname (boolean)
+k3s_system_prep_configure_hostname: true # Example: true or false
+
+# Whether to configure hosts file (boolean)
+k3s_system_prep_configure_hosts: true # Example: true or false
+
+# Whether to configure bridge netfilter (boolean)
+k3s_system_prep_configure_bridge_netfilter: true # Example: true or false
+
+# Whether to load br_netfilter module (boolean)
+k3s_system_prep_load_br_netfilter: true # Example: true or false
+
+# Whether to load overlay module (boolean)
+k3s_system_prep_load_overlay: true # Example: true or false
+
+# Whether to persist loaded modules (boolean)
+k3s_system_prep_persist_modules: true # Example: true or false
+
+# Sysctl settings for Kubernetes networking (list of dicts)
+k3s_system_prep_sysctl_settings:
+  - { name: net.ipv4.ip_forward, value: 1 }
+  - { name: net.bridge.bridge-nf-call-iptables, value: 1 }
+  - { name: net.bridge.bridge-nf-call-ip6tables, value: 1 }
+  # Example: add more sysctl settings as needed
+
+# Whether to configure firewall (boolean)
+k3s_system_prep_configure_firewall: false # Example: true or false
+
+# List of allowed TCP ports for firewall (list)
+k3s_system_prep_firewall_allowed_tcp_ports:
+  - 22 # SSH
+  - 80 # HTTP
+  - 443 # HTTPS
+  - 2379 # etcd client
+  - 2380 # etcd peer
+  - 6443 # Kubernetes API
+  - 8472 # Flannel VXLAN
+  - 10250 # Kubelet API
+  - 10251 # kube-scheduler
+  - 10252 # kube-controller-manager
+  - 30000-32767 # NodePort range
+  # Example: add more ports as needed
+
+# List of allowed UDP ports for firewall (list)
+k3s_system_prep_firewall_allowed_udp_ports:
+  - 8472 # Flannel VXLAN
+  # Example: add more ports as needed

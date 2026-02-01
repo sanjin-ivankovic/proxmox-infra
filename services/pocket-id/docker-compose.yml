@@ -1,0 +1,45 @@
+---
+# Pocket ID - OIDC Identity Provider
+# Simple passkey-based authentication provider for SSO
+#
+# Deployment: Auto-deployed via GitLab CI/CD on push to main
+# Web UI: http://<host-ip>:1411
+# Documentation: https://pocket-id.org/docs
+
+name: pocket-id
+
+services:
+  pocket-id:
+    image: ghcr.io/pocket-id/pocket-id:v2.2.0@sha256:84d20a801692b9635f481522df2672a7aae522726c30953dae52e17fc2696b27
+    container_name: pocket-id
+    restart: unless-stopped
+    environment:
+      - APP_URL=${APP_URL}
+      - ENCRYPTION_KEY=${ENCRYPTION_KEY}
+      - TRUST_PROXY=${TRUST_PROXY:-false}
+      - MAXMIND_LICENSE_KEY=${MAXMIND_LICENSE_KEY:-}
+      - PUID=${PUID:-1000}
+      - PGID=${PGID:-1000}
+      - TZ=${TZ:-UTC}
+    ports:
+      - 1411:1411
+    volumes:
+      - ${APPDATA_DIR}/pocket-id/data:/app/data
+    networks:
+      - pocket-id_network
+    healthcheck:
+      test:
+        [
+          'CMD',
+          '/app/pocket-id',
+          'healthcheck',
+        ]
+      interval: 1m30s
+      timeout: 5s
+      retries: 2
+      start_period: 10s
+
+networks:
+  pocket-id_network:
+    name: pocket-id_network
+    driver: bridge

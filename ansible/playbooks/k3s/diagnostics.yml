@@ -1,0 +1,31 @@
+---
+# playbooks/diagnostics.yml
+# Collect cluster diagnostics and troubleshooting information
+
+- name: Collect cluster diagnostics
+  hosts: masters[0]
+  become: true
+  remote_user: maintainer  # Use non-root user (root login disabled after bootstrap)
+  tasks:
+    - name: Get all resources
+      ansible.builtin.command: kubectl get all --all-namespaces
+      environment:
+        KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+      register: all_resources
+      changed_when: false
+
+    - name: Display resources
+      ansible.builtin.debug:
+        var: all_resources.stdout_lines
+
+    - name: Get events
+      ansible.builtin.command: kubectl get events --all-namespaces --sort-by='.lastTimestamp'
+      environment:
+        KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+      register: events
+      changed_when: false
+
+    - name: Display recent events
+      ansible.builtin.debug:
+        var: events.stdout_lines
+      changed_when: false

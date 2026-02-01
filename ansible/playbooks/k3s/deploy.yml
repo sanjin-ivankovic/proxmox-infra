@@ -1,0 +1,32 @@
+---
+# playbooks/k3s/deploy.yml
+# Main orchestrator for K3s cluster operations
+#
+# This is the primary entry point for K3s cluster management.
+# It can bootstrap, verify, or update the cluster based on provided tags.
+#
+# Usage:
+#   ansible-playbook -i k3s/inventory/hosts.yml playbooks/k3s/deploy.yml
+#   ansible-playbook -i k3s/inventory/hosts.yml playbooks/k3s/deploy.yml --tags verify
+#   ansible-playbook -i k3s/inventory/hosts.yml playbooks/k3s/deploy.yml --tags update
+
+# Bootstrap K3s cluster (masters first, then workers, with workload tiers)
+- name: Bootstrap K3s cluster
+  import_playbook: bootstrap.yml
+  tags: [bootstrap, never]
+
+# Verify cluster health and configuration
+- name: Verify K3s cluster
+  import_playbook: verify.yml
+  tags: [verify, never]
+
+# Update K3s to a new version
+- name: Update K3s cluster
+  import_playbook: update.yml
+  tags: [update, never]
+
+# Note: For maintenance operations, use dedicated playbooks:
+#   - playbooks/k3s/restart.yml     - Restart K3s services
+#   - playbooks/k3s/reboot.yml      - Reboot cluster nodes (tiered)
+#   - playbooks/k3s/shutdown.yml    - Shutdown cluster (tiered)
+#   - playbooks/k3s/diagnostics.yml - Run diagnostics

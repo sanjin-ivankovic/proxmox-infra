@@ -1,0 +1,342 @@
+---
+# playbooks/verify-cluster.yml
+# Verify K3s cluster health after maintenance/reboot
+
+- name: Wait for all nodes to be accessible
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Wait for SSH to be available
+      ansible.builtin.wait_for_connection:
+        timeout: 300
+        delay: 10
+
+    - name: Gather facts after connection
+      ansible.builtin.setup:
+
+- name: Verify master nodes are running K3s
+  hosts: masters
+  become: true
+  remote_user: maintainer  # Use non-root user (root login disabled after bootstrap)
+  tasks:
+    - name: Check K3s service status
+      ansible.builtin.systemd:
+        name: k3s
+      register: k3s_cluster_status
+
+    - name: Display K3s status
+      ansible.builtin.debug:
+        msg: "K3s service on {{ inventory_hostname }}: {{ k3s_cluster_status.status.ActiveState }}"
+
+    - name: Verify K3s is active
+      ansible.builtin.assert:
+        that:
+          - k3s_cluster_status.status.ActiveState == "active"
+        fail_msg: "K3s service is not active on {{ inventory_hostname }}"
+        success_msg: "K3s service is running on {{ inventory_hostname }}"
+
+- name: Verify worker nodes are running K3s agent
+  hosts: workers
+  become: true
+  remote_user: maintainer  # Use non-root user (root login disabled after bootstrap)
+  tasks:
+    - name: Check K3s agent service status
+      ansible.builtin.systemd:
+        name: k3s-agent
+      register: k3s_cluster_agent_status
+
+    - name: Display K3s agent status
+      ansible.builtin.debug:
+        msg: "K3s agent service on {{ inventory_hostname }}: {{ k3s_cluster_agent_status.status.ActiveState }}"
+
+    - name: Verify K3s agent is active
+      ansible.builtin.assert:
+        that:
+          - k3s_cluster_agent_status.status.ActiveState == "active"
+        fail_msg: "K3s agent service is not active on {{ inventory_hostname }}"
+        success_msg: "K3s agent service is running on {{ inventory_hostname }}"
+
+- name: Verify cluster health from first master
+  hosts: masters[0]
+  become: true
+  remote_user: maintainer  # Use non-root user (root login disabled after bootstrap)
+  tasks:
+    - name: Wait for API server to be responsive
+      ansible.builtin.wait_for:
+        port: 6443
+        host: "{{ ansible_host }}"
+        timeout: 300
+        delay: 10
+
+    - name: Get all nodes status
+      ansible.builtin.command: kubectl get nodes -o wide
+      environment:
+        KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+      register: nodes_status
+      changed_when: false
+
+    - name: Display nodes status
+      ansible.builtin.debug:
+        var: nodes_status.stdout_lines
+
+    - name: Check if all nodes are Ready
+      ansible.builtin.shell: |
+        set -o pipefail
+        kubectl get nodes --no-headers | grep -v " Ready " | wc -l || echo "0"
+      args:
+        executable: /bin/bash
+      environment:
+        KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+      register: not_ready_count
+      changed_when: false
+      failed_when: false
+
+    - name: Verify all nodes are Ready
+      ansible.builtin.assert:
+        that:
+          - not_ready_count.stdout | int == 0
+        fail_msg: "Some nodes are not Ready. Check 'kubectl get nodes' for details."
+        success_msg: "All {{ groups['k3s_cluster'] | length }} nodes are Ready!"
+
+    - name: Get system pods status
+      ansible.builtin.command: kubectl get pods -n kube-system -o wide
+      environment:
+        KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+      register: system_pods
+      changed_when: false
+
+    - name: Display system pods status
+      ansible.builtin.debug:
+        var: system_pods.stdout_lines
+
+    - name: Check for unhealthy system pods
+      ansible.builtin.shell: |
+        set -o pipefail
+        kubectl get pods -n kube-system --no-headers | grep -vE "(Running|Completed)" | wc -l || echo "0"
+      args:
+        executable: /bin/bash
+      environment:
+        KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+      register: unhealthy_pods
+      changed_when: false
+      failed_when: false
+
+    - name: Verify system pods are healthy
+      ansible.builtin.assert:
+        that:
+          - unhealthy_pods.stdout | int == 0
+        fail_msg: "Some kube-system pods are not healthy. Check 'kubectl get pods -n kube-system' for details."
+        success_msg: "All kube-system pods are healthy!"
+
+    - name: Get cluster info
+      ansible.builtin.command: kubectl cluster-info
+      environment:
+        KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+      register: cluster_info
+      changed_when: false
+
+    - name: Display cluster info
+      ansible.builtin.debug:
+        var: cluster_info.stdout_lines
+
+    # ========================================================================
+    # Verify Three-Tier Workload Architecture
+    # ========================================================================
+    - name: Check for workload-tier labels on all nodes
+      ansible.builtin.shell: |
+        kubectl get nodes -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.metadata.labels.workload-tier}{"\n"}{end}'
+      environment:
+        KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+      changed_when: false
+      register: tier_labels
+
+    - name: Display tier labels
+      ansible.builtin.debug:
+        msg: "{{ tier_labels.stdout_lines }}"
+
+    - name: Verify all nodes have workload-tier labels
+      ansible.builtin.shell: |
+        set -o pipefail
+        kubectl get nodes -o jsonpath='{range .items[*]}{.metadata.labels.workload-tier}{"\n"}{end}' | grep -c "."
+      args:
+        executable: /bin/bash
+      environment:
+        KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+      changed_when: false
+      register: labeled_nodes_count
+
+    - name: Assert all nodes are labeled
+      ansible.builtin.assert:
+        that:
+          - labeled_nodes_count.stdout | int == groups['k3s_cluster'] | length
+        fail_msg: |
+          Not all nodes have workload-tier labels!
+          Expected: {{ groups['k3s_cluster'] | length }}, Found: {{ labeled_nodes_count.stdout }}
+          Run: ansible-playbook -i k3s/inventory/hosts.yml -i k3s/inventory/workload-tiers.yml playbooks/k3s/apply-workload-tiers.yml
+        success_msg: "All {{ groups['k3s_cluster'] | length }} nodes have workload-tier labels!"
+
+    - name: Verify infrastructure tier configuration
+      ansible.builtin.shell: |
+        set -o pipefail
+        kubectl get nodes -l workload-tier=infrastructure -o name | wc -l
+      args:
+        executable: /bin/bash
+      environment:
+        KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+      changed_when: false
+      register: infrastructure_nodes
+
+    - name: Assert infrastructure tier is correct
+      ansible.builtin.assert:
+        that:
+          - infrastructure_nodes.stdout | int == groups['masters'] | length
+        fail_msg: "Infrastructure tier mismatch! Expected {{ groups['masters'] | length }}, found {{ infrastructure_nodes.stdout }}"
+        success_msg: "Infrastructure tier: {{ infrastructure_nodes.stdout }} masters (correct)"
+
+    - name: Verify stateful tier configuration
+      ansible.builtin.shell: |
+        set -o pipefail
+        kubectl get nodes -l workload-tier=stateful -o name | wc -l
+      args:
+        executable: /bin/bash
+      environment:
+        KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+      changed_when: false
+      register: stateful_nodes
+
+    - name: Assert stateful tier is correct
+      ansible.builtin.assert:
+        that:
+          - stateful_nodes.stdout | int == 1
+        fail_msg: "Stateful tier mismatch! Expected 1, found {{ stateful_nodes.stdout }}"
+        success_msg: "Stateful tier: 1 node (worker-1) (correct)"
+
+    - name: Verify stateless tier configuration
+      ansible.builtin.shell: |
+        set -o pipefail
+        kubectl get nodes -l workload-tier=stateless -o name | wc -l
+      args:
+        executable: /bin/bash
+      environment:
+        KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+      changed_when: false
+      register: stateless_nodes
+
+    - name: Assert stateless tier is correct
+      ansible.builtin.assert:
+        that:
+          - stateless_nodes.stdout | int == 2
+        fail_msg: "Stateless tier mismatch! Expected 2, found {{ stateless_nodes.stdout }}"
+        success_msg: "Stateless tier: 2 nodes (workers 2-3) (correct)"
+
+    - name: Check for workload-type taints on worker nodes
+      ansible.builtin.shell: |
+        set -o pipefail
+        kubectl get nodes -o json | \
+          jq -r '.items[] |
+            select(.metadata.labels."node-role.kubernetes.io/master" != "true") |
+            .metadata.name + "\t" +
+            ([.spec.taints[]? | select(.key=="workload-type") |
+              .key + "=" + .value + ":" + .effect] | join(","))'
+      args:
+        executable: /bin/bash
+      environment:
+        KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+      changed_when: false
+      register: worker_taints
+
+    - name: Display worker taints
+      ansible.builtin.debug:
+        msg: "{{ worker_taints.stdout_lines }}"
+
+    - name: Verify control-plane taints on masters
+      ansible.builtin.shell: |
+        set -o pipefail
+        kubectl get nodes -o json | \
+          jq -r '.items[] |
+            select(.metadata.labels."node-role.kubernetes.io/control-plane" == "true") |
+            .metadata.name + "\t" +
+            ([.spec.taints[]? | select(.key=="node-role.kubernetes.io/control-plane") |
+              .key + "=" + .value + ":" + .effect] | join(","))'
+      args:
+        executable: /bin/bash
+      environment:
+        KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+      changed_when: false
+      register: master_taints_check
+
+    - name: Display master taints
+      ansible.builtin.debug:
+        msg: "{{ master_taints_check.stdout_lines }}"
+
+    - name: Count nodes with proper taints
+      ansible.builtin.shell: |
+        set -o pipefail
+        # Count masters with control-plane taint
+        masters_with_taint=$(kubectl get nodes -o json | \
+          jq -r '[.items[] |
+            select(.metadata.labels."node-role.kubernetes.io/control-plane" == "true") |
+            select(.spec.taints[]? | .key=="node-role.kubernetes.io/control-plane")] |
+            length')
+        # Count workers with workload-type taint
+        workers_with_taint=$(kubectl get nodes -o json | \
+          jq -r '[.items[] |
+            select(.metadata.labels."node-role.kubernetes.io/master" != "true") |
+            select(.spec.taints[]? | .key=="workload-type")] |
+            length')
+        echo "$masters_with_taint,$workers_with_taint"
+      args:
+        executable: /bin/bash
+      environment:
+        KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+      changed_when: false
+      register: taint_counts
+
+    - name: Parse taint counts
+      ansible.builtin.set_fact:
+        masters_tainted: "{{ taint_counts.stdout.split(',')[0] | int }}"
+        workers_tainted: "{{ taint_counts.stdout.split(',')[1] | int }}"
+
+    - name: Assert all masters have control-plane taint
+      ansible.builtin.assert:
+        that:
+          - masters_tainted | int == groups['masters'] | length
+        fail_msg: "Not all masters have control-plane taint! Expected {{ groups['masters'] | length }}, found {{ masters_tainted }}"
+        success_msg: "All {{ groups['masters'] | length }} masters have control-plane taint"
+
+    - name: Assert all workers have workload-type taint
+      ansible.builtin.assert:
+        that:
+          - workers_tainted | int == groups['workers'] | length
+        fail_msg: "Not all workers have workload-type taint! Expected {{ groups['workers'] | length }}, found {{ workers_tainted }}"
+        success_msg: "All {{ groups['workers'] | length }} workers have workload-type taint"
+
+- name: Final health summary
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: Display success message
+      ansible.builtin.debug:
+        msg: |
+          ✅ K3s Cluster Health Check PASSED!
+
+          Summary:
+          - All {{ groups['masters'] | length }} master nodes are running
+          - All {{ groups['workers'] | length }} worker nodes are running
+          - All nodes are in Ready state
+          - All kube-system pods are healthy
+          - API server is responsive
+
+          Three-Tier Architecture:
+          - Infrastructure tier: {{ groups['masters'] | length }} masters (workload-tier=infrastructure)
+          - Stateful tier: 1 worker (workload-tier=stateful, worker-1)
+          - Stateless tier: 2 workers (workload-tier=stateless, workers 2-3)
+          - All taints properly configured ✓
+
+          Your cluster is ready for use!
+
+          Next steps:
+          - Verify your applications: kubectl get pods --all-namespaces
+          - Check ArgoCD: kubectl get applications -n argocd
+          - Monitor logs: kubectl logs -n <namespace> <pod-name>
+          - View tier placement: kubectl get pods -A -o wide

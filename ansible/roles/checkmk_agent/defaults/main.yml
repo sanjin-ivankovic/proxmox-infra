@@ -1,0 +1,27 @@
+---
+# ansible/roles/checkmk_agent/defaults/main.yml
+# CheckMK Agent Installation Role - Default Variables
+
+# CheckMK server configuration
+checkmk_agent_server_host: "10.40.0.14"
+checkmk_agent_server_fqdn: "checkmk.example.com"
+checkmk_agent_server_port: "8000"
+checkmk_agent_site_id: "cmk"
+
+# Agent download URL
+checkmk_agent_url: "https://{{ checkmk_agent_server_fqdn }}/cmk/check_mk/agents/check-mk-agent_2.4.0-1_all.deb"
+
+# Registration credentials (use Ansible Vault for production)
+checkmk_agent_admin_user: "cmkadmin"
+checkmk_agent_admin_password: "{{ vault_checkmk_admin_password | default('CHANGE_ME') }}"
+
+# TLS configuration
+checkmk_agent_enable_tls: true
+checkmk_agent_trust_cert: true
+
+# Docker monitoring plugin
+checkmk_agent_enable_docker_monitoring: true
+
+# Agent configuration
+checkmk_agent_package: "/tmp/check-mk-agent.deb"
+checkmk_agent_port: 6556

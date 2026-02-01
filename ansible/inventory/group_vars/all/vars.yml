@@ -1,0 +1,6 @@
+---
+# ansible/inventory/group_vars/all/vars.yml
+# Global variables for all hosts
+
+# User configuration
+user: maintainer

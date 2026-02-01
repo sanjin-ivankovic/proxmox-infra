@@ -1,0 +1,107 @@
+# GitLab CI/CD Pipeline for CheckMK Agent Deployment
+# Copy this to your .gitlab-ci.yml or include it
+
+stages:
+  - validate
+  - deploy
+  - verify
+
+variables:
+  ANSIBLE_FORCE_COLOR: "true"
+  ANSIBLE_HOST_KEY_CHECKING: "false"
+
+# Validate Ansible syntax
+validate-playbook:
+  stage: validate
+  image: cytopia/ansible:latest
+  script:
+    - cd ansible
+    - ansible-playbook playbooks/monitoring/deploy-checkmk-agent.yml --syntax-check
+  only:
+    changes:
+      - ansible/playbooks/monitoring/**/*
+      - ansible/roles/checkmk_agent/**/*
+
+# Deploy to single test host
+deploy-test:
+  stage: deploy
+  image: cytopia/ansible:latest
+  script:
+    - cd ansible/monitoring
+    - make deploy-host HOST=semaphore
+  environment:
+    name: monitoring/test
+  when: manual
+  only:
+    - main
+
+# Deploy to all LXC containers
+deploy-lxc:
+  stage: deploy
+  image: cytopia/ansible:latest
+  script:
+    - cd ansible/monitoring
+    - make deploy-lxc
+  environment:
+    name: monitoring/lxc
+  when: manual
+  only:
+    - main
+
+# Deploy to all VMs
+deploy-vms:
+  stage: deploy
+  image: cytopia/ansible:latest
+  script:
+    - cd ansible/monitoring
+    - make deploy-vms
+  environment:
+    name: monitoring/vms
+  when: manual
+  only:
+    - main
+
+# Deploy to everything
+deploy-all:
+  stage: deploy
+  image: cytopia/ansible:latest
+  script:
+    - cd ansible/monitoring
+    - make deploy-all
+  environment:
+    name: monitoring/production
+  when: manual
+  only:
+    - main
+  needs:
+    - validate-playbook
+
+# Verify deployment
+verify-deployment:
+  stage: verify
+  image: cytopia/ansible:latest
+  script:
+    - cd ansible
+    - |
+      ansible all -i lxc/inventory/ -i linux-vms/inventory/ \
+        --vault-password-file .vault_pass \
+        -m shell \
+        -a "systemctl is-active check-mk-agent.socket" \
+        --become
+  when: manual
+  only:
+    - main
+
+# Remove agents (emergency)
+remove-agents:
+  stage: deploy
+  image: cytopia/ansible:latest
+  script:
+    - cd ansible/monitoring
+    - make remove-all
+  environment:
+    name: monitoring/removal
+  when: manual
+  only:
+    - main
+  allow_failure: true

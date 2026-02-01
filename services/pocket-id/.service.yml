@@ -1,0 +1,7 @@
+---
+# Pocket ID Service Metadata
+# This file is used by the GitLab CI/CD pipeline for automated deployment
+
+# [REQUIRED] Deployment Target
+# Maps to GitLab CI secrets: ENV_POCKET_ID, HOST_POCKET_ID, SSH_KEY_POCKET_ID
+target_host: pocket-id

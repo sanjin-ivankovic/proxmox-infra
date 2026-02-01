@@ -1,0 +1,53 @@
+---
+# ansible/roles/common_system/defaults/main.yml
+# Default variables for common_system role
+# These can be overridden in playbooks, group_vars, or via -e flag
+
+# Backup configuration
+common_system_backup_dir: "/root/backup"
+common_system_backup_sshd_config: true
+
+# Network connectivity check
+common_system_network_check_enabled: true
+common_system_network_check_host: "1.1.1.1"
+common_system_network_check_count: 2
+common_system_network_check_timeout: 3
+
+# OS version requirements
+common_system_debian_version_min: 13
+common_system_ubuntu_version_min: 24
+common_system_supported_distributions:
+  - Debian
+  - Ubuntu
+
+# APT package management
+common_system_apt_upgrade_strategy: "dist"
+common_system_apt_cache_valid_time: 3600
+common_system_apt_install_recommends: false
+common_system_apt_force_apt_get: true
+
+# Required system packages
+# Note: apt-transport-https is deprecated in Debian 13+ and Ubuntu 24+
+common_system_required_packages:
+  - sudo
+  - curl
+  - ca-certificates
+  - gnupg
+  - rsync
+  - vim
+  - htop
+  - net-tools
+
+# Optional packages (install if common_system_install_optional: true)
+common_system_install_optional: false
+common_system_optional_packages:
+  - tmux
+  - git
+  - wget
+
+# System capabilities
+common_system_enable_ping_capability: true
+
+# Timezone configuration
+common_system_configure_timezone: false
+common_system_timezone: "UTC"

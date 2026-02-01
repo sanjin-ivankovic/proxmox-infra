@@ -1,0 +1,8 @@
+---
+# ansible/roles/checkmk_agent/handlers/main.yml
+# Handler definitions
+
+- name: Restart check-mk-agent
+  ansible.builtin.systemd:
+    name: check-mk-agent.socket
+    state: restarted

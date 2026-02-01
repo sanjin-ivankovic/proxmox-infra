@@ -1,0 +1,13 @@
+---
+# inventory/group_vars/all/main.yml
+
+# Common variables for all hosts
+domain: 'example.com'
+k3s_cluster_name: 'prod-cluster'
+k3s_cluster_endpoint: 'https://10.40.0.40:6443'
+
+# DNS configuration
+# Default DNS servers for k3s nodes (can be overridden via -e flag)
+dns_servers:
+  - '10.10.0.12'
+  - '10.10.0.13'

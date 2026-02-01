@@ -1,0 +1,11 @@
+---
+# roles/k3s_system_prep/tasks/07-bash-aliases.yml
+
+- name: Deploy Kubernetes bash aliases for {{ ansible_user }}
+  ansible.builtin.template:
+    src: bash_aliases.j2
+    dest: "{{ (ansible_user == 'root') | ternary('/root', '/home/' + ansible_user) }}/.bash_aliases"
+    owner: '{{ ansible_user }}'
+    group: '{{ ansible_user }}'
+    mode: '0644'
+  become: true

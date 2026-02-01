@@ -1,0 +1,40 @@
+---
+# ansible/playbooks/monitoring/remove-checkmk-agent.yml
+# Remove CheckMK agent from hosts
+
+- name: Remove CheckMK Agent
+  hosts: all
+  become: true
+  gather_facts: false
+
+  tasks:
+    - name: Stop and disable agent socket
+      ansible.builtin.systemd:
+        name: check-mk-agent.socket
+        state: stopped
+        enabled: false
+      failed_when: false
+
+    - name: Unregister agent
+      ansible.builtin.command: cmk-agent-ctl delete-all
+      failed_when: false
+      changed_when: false
+
+    - name: Remove CheckMK agent package
+      ansible.builtin.apt:
+        name: check-mk-agent
+        state: absent
+        purge: true
+
+    - name: Remove agent directories
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - /usr/lib/check_mk_agent
+        - /etc/check_mk
+        - /var/lib/check-mk-agent
+
+    - name: Display removal status
+      ansible.builtin.debug:
+        msg: "CheckMK agent removed from {{ inventory_hostname }}"

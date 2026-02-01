@@ -1,0 +1,120 @@
+---
+# roles/k3s_cluster_cluster/tasks/02-additional-masters.yml
+# Join additional masters to the first master's cluster
+
+# Assert required variables are set
+- name: Assert k3s_cluster_token is defined and not empty
+  ansible.builtin.assert:
+    that:
+      - k3s_cluster_token is defined
+      - k3s_cluster_token | length > 0
+    fail_msg: 'k3s_cluster_token must be defined and non-empty. Set it in group_vars/all/main.yml or via Ansible Vault.'
+  tags: [master]
+
+# Build K3s additional master install arguments
+- name: Build K3s additional master install arguments
+  ansible.builtin.set_fact:
+    k3s_cluster_server_args: >-
+      server
+      --token {{ k3s_cluster_token }}
+      --server https://{{ hostvars[groups['masters'][0]].ansible_host }}:6443
+      --write-kubeconfig-mode={{ k3s_cluster_write_kubeconfig_mode }}
+      {% if k3s_cluster_disable | length > 0 %}
+      {% for component in k3s_cluster_disable %}
+      --disable={{ component }}
+      {% endfor %}
+      {% endif %}
+      {% if k3s_cluster_master_tls_sans | length > 0 %}
+      {% for san in k3s_cluster_master_tls_sans %}
+      --tls-san {{ san }}
+      {% endfor %}
+      {% endif %}
+      --node-ip {{ ansible_host }}
+  tags: [master]
+
+# Debug: Show constructed server arguments
+- name: Debug K3s server arguments
+  ansible.builtin.debug:
+    var: k3s_cluster_server_args
+  tags: [master]
+
+# Check if K3s service file exists
+- name: Check if K3s service file exists
+  ansible.builtin.stat:
+    path: /etc/systemd/system/k3s.service
+  register: k3s_cluster_service_file
+  tags: [master]
+
+# Download K3s install script
+- name: Download K3s install script
+  ansible.builtin.get_url:
+    url: '{{ k3s_cluster_install_script_url }}'
+    dest: /tmp/k3s-install.sh
+    mode: '0755'
+  when:
+    - k3s_cluster_token is defined
+    - not ansible_check_mode
+  tags: [master]
+
+# Test connectivity to first master
+- name: Test connectivity to first master
+  ansible.builtin.uri:
+    url: "https://{{ hostvars[groups['masters'][0]].ansible_host }}:6443/readyz"
+    method: GET
+    validate_certs: false
+    status_code: [200, 401] # 401 is OK - means server is up but unauthorized
+  retries: 10
+  delay: 5
+  tags: [master]
+
+# Install K3s additional master
+- name: Install K3s additional master
+  ansible.builtin.shell: |
+    set -o pipefail
+    /tmp/k3s-install.sh
+  args:
+    creates: /usr/local/bin/k3s
+    executable: /bin/bash
+  register: k3s_cluster_server_installed
+  when:
+    - k3s_cluster_token is defined
+    - not ansible_check_mode
+  environment:
+    INSTALL_K3S_EXEC: '{{ k3s_cluster_server_args }}'
+    INSTALL_K3S_VERSION: '{{ k3s_cluster_version }}'
+    INSTALL_K3S_CHANNEL: '{{ k3s_cluster_channel }}'
+    K3S_TOKEN: '{{ k3s_cluster_token }}'
+  failed_when:
+    - k3s_cluster_server_installed.rc != 0
+  tags: [master]
+
+# Verify K3s service status
+- name: Ensure K3s server service is enabled and running
+  ansible.builtin.service:
+    name: k3s
+    state: started
+    enabled: true
+  register: k3s_cluster_server_service
+  when: not ansible_check_mode
+  failed_when:
+    - k3s_cluster_server_service.failed
+  tags: [master]
+
+# Verify API server is responding
+- name: Wait for K3s API server
+  ansible.builtin.wait_for:
+    host: 127.0.0.1
+    port: 6443
+    state: started
+    delay: 5
+    timeout: 120
+  tags: [master]
+
+# Create kubectl symlink for convenience
+- name: Ensure kubectl symlink exists
+  ansible.builtin.file:
+    src: /usr/local/bin/k3s
+    dest: /usr/local/bin/kubectl
+    state: link
+  when: not ansible_check_mode
+  tags: [master]

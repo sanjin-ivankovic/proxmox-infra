@@ -1,0 +1,44 @@
+---
+# ansible/roles/checkmk_agent/tasks/register-tls.yml
+# Register CheckMK agent with TLS encryption
+
+- name: Check if agent is already registered
+  ansible.builtin.command: cmk-agent-ctl status
+  register: checkmk_agent_status
+  changed_when: false
+  failed_when: false
+
+- name: Register agent with CheckMK server
+  ansible.builtin.command: >
+    cmk-agent-ctl register
+    --hostname {{ inventory_hostname }}
+    --server {{ checkmk_agent_server_host }}:{{ checkmk_agent_server_port }}
+    --site {{ checkmk_agent_site_id }}
+    --user {{ checkmk_agent_admin_user }}
+    --password '{{ checkmk_agent_admin_password }}'
+    {{ '--trust-cert' if checkmk_agent_trust_cert else '' }}
+  register: checkmk_agent_registration_result
+  when: "'registered' not in checkmk_agent_status.stdout"
+  no_log: false  # Temporarily disabled for debugging
+  changed_when: checkmk_agent_registration_result.rc == 0
+  failed_when:
+    - checkmk_agent_registration_result.rc != 0
+    - "'already registered' not in checkmk_agent_registration_result.stderr"
+
+- name: Display registration error if failed
+  ansible.builtin.debug:
+    msg:
+      - "Registration failed!"
+      - "Return code: {{ checkmk_agent_registration_result.rc }}"
+      - "STDOUT: {{ checkmk_agent_registration_result.stdout }}"
+      - "STDERR: {{ checkmk_agent_registration_result.stderr }}"
+  when:
+    - checkmk_agent_registration_result is defined
+    - checkmk_agent_registration_result.rc != 0
+
+- name: Display registration status
+  ansible.builtin.debug:
+    msg: "Agent {{ 'registered' if checkmk_agent_registration_result.changed else 'already registered' }} with TLS encryption"
+  when:
+    - checkmk_agent_registration_result is defined
+    - checkmk_agent_registration_result.rc == 0

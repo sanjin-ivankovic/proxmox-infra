@@ -1,0 +1,60 @@
+---
+# ansible/roles/checkmk_agent/tasks/main.yml
+# CheckMK Agent Installation and Configuration
+
+- name: Include OS-specific tasks
+  ansible.builtin.include_tasks: "{{ ansible_os_family | lower }}.yml"
+
+- name: Download CheckMK agent package
+  ansible.builtin.get_url:
+    url: "{{ checkmk_agent_url }}"
+    dest: "{{ checkmk_agent_package }}"
+    mode: '0644'
+    validate_certs: "{{ not checkmk_agent_trust_cert }}"
+  register: checkmk_agent_download
+
+- name: Install CheckMK agent package
+  ansible.builtin.apt:
+    deb: "{{ checkmk_agent_package }}"
+    state: present
+  when: checkmk_agent_download is succeeded
+
+- name: Fix dependencies if needed
+  ansible.builtin.apt:
+    name: check-mk-agent
+    state: fixed
+  failed_when: false
+
+- name: Enable and start CheckMK agent socket
+  ansible.builtin.systemd:
+    name: check-mk-agent.socket
+    enabled: true
+    state: started
+
+- name: Wait for agent socket to be ready
+  ansible.builtin.wait_for:
+    port: "{{ checkmk_agent_port }}"
+    timeout: 30
+
+- name: Install Docker monitoring plugin
+  ansible.builtin.include_tasks: docker-plugin.yml
+  when: checkmk_agent_enable_docker_monitoring | bool
+
+- name: Register agent with TLS
+  ansible.builtin.include_tasks: register-tls.yml
+  when: checkmk_agent_enable_tls | bool
+
+- name: Verify agent is running
+  ansible.builtin.command: check_mk_agent
+  register: checkmk_agent_test
+  changed_when: false
+
+- name: Display agent status
+  ansible.builtin.debug:
+    msg: "CheckMK agent installed and running on {{ inventory_hostname }}"
+  when: checkmk_agent_test.rc == 0
+
+- name: Cleanup downloaded package
+  ansible.builtin.file:
+    path: "{{ checkmk_agent_package }}"
+    state: absent
