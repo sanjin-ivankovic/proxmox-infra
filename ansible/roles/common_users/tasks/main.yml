@@ -1,0 +1,71 @@
+---
+# ansible/roles/common_users/tasks/main.yml
+
+- name: Create user account
+  tags: [users, create]
+  ansible.builtin.user:
+    name: "{{ common_users_user }}"
+    state: present
+    shell: "{{ common_users_user_shell }}"
+    comment: "{{ common_users_user_comment }}"
+    create_home: true
+    groups: "{{ common_users_groups }}"
+    append: true
+    password: "{{ common_users_user_password_hash | default(omit) }}"
+  register: common_users_create_result
+
+- name: Configure passwordless sudo
+  tags: [users, sudo, security]
+  community.general.sudoers:
+    name: "{{ common_users_user }}"
+    user: "{{ common_users_user }}"
+    host: ALL
+    commands: "{{ common_users_sudo_commands }}"
+    nopassword: "{{ common_users_sudo_nopassword | bool }}"
+    state: present
+    validation: required
+
+- name: Setup SSH access
+  tags: [users, ssh, security]
+  block:
+    - name: Create .ssh directory
+      ansible.builtin.file:
+        path: "/home/{{ common_users_user }}/.ssh"
+        state: directory
+        mode: '0700'
+        owner: "{{ common_users_user }}"
+        group: "{{ common_users_user }}"
+
+    - name: Copy authorized_keys from root
+      ansible.builtin.copy:
+        src: "{{ common_users_root_ssh_keys_path }}"
+        dest: "/home/{{ common_users_user }}/.ssh/authorized_keys"
+        remote_src: true
+        owner: "{{ common_users_user }}"
+        group: "{{ common_users_user }}"
+        mode: '0600'
+
+- name: Deploy bash_aliases
+  tags: [users, config]
+  ansible.builtin.copy:
+    src: bash_aliases
+    dest: "/home/{{ common_users_user }}/.bash_aliases"
+    owner: "{{ common_users_user }}"
+    group: "{{ common_users_user }}"
+    mode: '0644'
+  when: common_users_deploy_bash_aliases | bool
+
+- name: Harden root account
+  tags: [users, security, harden]
+  block:
+    - name: Lock root password
+      ansible.builtin.user:
+        name: root
+        password_lock: true
+      when: common_users_lock_root_account | bool
+
+    - name: Expire root password
+      ansible.builtin.command: passwd -e root
+      when: common_users_expire_root_password | bool
+      changed_when: true
+      failed_when: false

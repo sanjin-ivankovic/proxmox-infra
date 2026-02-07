@@ -1,0 +1,25 @@
+---
+# roles/common/meta/main.yml
+
+galaxy_info:
+  author: Maintainer Name
+  description: >
+    Ensure control-node has python3-pip and the Kubernetes Python client
+    so that Ansible's k8s modules work correctly.
+  license: MIT
+  min_ansible_version: '2.9'
+  platforms:
+    - name: Debian
+      versions:
+        - buster
+        - bullseye
+    - name: Ubuntu
+      versions:
+        - focal
+        - jammy
+  galaxy_tags:
+    - common
+    - python
+    - kubernetes
+
+dependencies: []

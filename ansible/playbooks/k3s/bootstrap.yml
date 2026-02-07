@@ -1,0 +1,212 @@
+---
+# playbooks/bootstrap-cluster.yml
+
+# Pre-initialize temporary directory
+- name: Configure ansible directories
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Create ansible temp directory with proper permissions
+      ansible.builtin.file:
+        path: '/tmp/.ansible/tmp'
+        state: directory
+        mode: '1777'
+
+# Bootstrap K3s cluster (masters first, then workers)
+# Note: K3s nodes should be bootstrapped as Linux VMs first (creates maintainer user, disables root)
+# This playbook installs K3s using the maintainer user with sudo
+
+# Bootstrap first K3s master
+- name: Bootstrap first K3s master
+  hosts: masters[0]
+  become: true
+  gather_facts: true
+  remote_user: maintainer # Use non-root user (root login disabled after Linux VM bootstrap)
+  roles:
+    - k3s_system_prep
+    - k3s_cluster
+
+# Ensure the first master is ready before proceeding
+- name: Wait for first master to be ready
+  hosts: masters[0]
+  become: true
+  tasks:
+    - name: Wait for K3s API server
+      ansible.builtin.wait_for:
+        port: 6443
+        host: '{{ ansible_host }}'
+        delay: 10
+
+# Bootstrap additional K3s masters (one at a time)
+- name: Bootstrap additional K3s masters
+  hosts: masters[1:]
+  become: true
+  gather_facts: true
+  remote_user: maintainer # Use non-root user (root login disabled after Linux VM bootstrap)
+  serial: 1
+  roles:
+    - k3s_system_prep
+    - k3s_cluster
+
+# Bootstrap K3s workers
+- name: Bootstrap K3s workers
+  hosts: workers
+  become: true
+  gather_facts: true
+  remote_user: maintainer # Use non-root user (root login disabled after Linux VM bootstrap)
+  roles:
+    - k3s_system_prep
+    - k3s_cluster
+
+# ============================================================================
+# Apply Three-Tier Workload Architecture
+# ============================================================================
+# Automatically apply workload-tier labels and taints after cluster bootstrap
+# This configures the infrastructure/stateful/stateless tier system
+# ============================================================================
+
+- name: Apply Workload Tier Configuration
+  hosts: localhost
+  gather_facts: false
+  vars:
+    control_node: "{{ groups['masters'][0] }}"
+
+  tasks:
+    - name: Wait for cluster to stabilize
+      ansible.builtin.pause:
+        seconds: 30
+        prompt: 'Waiting for K3s cluster to stabilize before applying tier configuration...'
+
+    - name: Verify K3s cluster is accessible
+      ansible.builtin.command: kubectl get nodes
+      delegate_to: '{{ control_node }}'
+      environment:
+        KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+      changed_when: false
+      register: cluster_check
+      retries: 10
+      delay: 10
+      until: cluster_check.rc == 0
+
+    # ========================================================================
+    # Infrastructure Tier - Label Masters
+    # ========================================================================
+    - name: Label master nodes with infrastructure tier
+      kubernetes.core.k8s:
+        api_version: v1
+        kind: Node
+        name: '{{ item }}'
+        state: present
+        definition:
+          metadata:
+            labels:
+              workload-tier: infrastructure
+              workload.homelab/tier: infrastructure
+              workload.homelab/role: control-plane
+              workload.homelab/storage-capable: 'false'
+      loop: "{{ groups['masters'] }}"
+      delegate_to: '{{ control_node }}'
+
+    - name: Apply control-plane taint to master nodes (prevent workload scheduling)
+      ansible.builtin.command: >
+        kubectl taint nodes {{ item }}
+        node-role.kubernetes.io/control-plane=true:NoSchedule
+        --overwrite
+      loop: "{{ groups['masters'] }}"
+      delegate_to: '{{ control_node }}'
+      environment:
+        KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+      register: taint_masters
+      changed_when: "'tainted' in taint_masters.stdout or 'updated' in taint_masters.stdout"
+      failed_when: >
+        taint_masters.rc != 0 and
+        'already has' not in taint_masters.stderr
+      tags: [taints]
+
+    # ========================================================================
+    # Stateful Tier - Label and Taint worker-1
+    # ========================================================================
+    - name: Label stateful tier node (worker-1)
+      kubernetes.core.k8s:
+        api_version: v1
+        kind: Node
+        name: "{{ groups['workers'][0] }}"
+        state: present
+        definition:
+          metadata:
+            labels:
+              workload-tier: stateful
+              workload.homelab/tier: stateful
+              workload.homelab/role: worker
+              workload.homelab/storage-capable: 'true'
+      delegate_to: '{{ control_node }}'
+
+    # ========================================================================
+    # Stateless Tier - Label workers 2-3
+    # ========================================================================
+    - name: Label stateless tier nodes (workers 2-3)
+      kubernetes.core.k8s:
+        api_version: v1
+        kind: Node
+        name: '{{ item }}'
+        state: present
+        definition:
+          metadata:
+            labels:
+              workload-tier: stateless
+              workload.homelab/tier: stateless
+              workload.homelab/role: worker
+              workload.homelab/storage-capable: 'false'
+      loop: "{{ groups['workers'][1:] }}"
+      delegate_to: '{{ control_node }}'
+
+    # ========================================================================
+    # Verification
+    # ========================================================================
+    - name: Display node labels and taints
+      ansible.builtin.shell: |
+        kubectl get nodes -o custom-columns=\
+        NAME:.metadata.name,\
+        TIER:.metadata.labels.workload\\.homelab/tier,\
+        OLD_TIER:.metadata.labels.workload-tier,\
+        TAINTS:.spec.taints[*].key
+      delegate_to: '{{ control_node }}'
+      environment:
+        KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+      changed_when: false
+      register: node_status
+
+    - name: Show tier configuration
+      ansible.builtin.debug:
+        msg: '{{ node_status.stdout_lines }}'
+
+    - name: Bootstrap complete summary
+      ansible.builtin.debug:
+        msg: |
+          ✓ K3s cluster bootstrap complete with three-tier architecture!
+
+          Infrastructure tier (masters): {{ groups['masters'] | join(', ') }}
+            - Label: workload.homelab/tier=infrastructure
+            - Label: workload.homelab/role=control-plane
+            - Taint: node-role.kubernetes.io/control-plane=true:NoSchedule (applied by playbook)
+
+          Stateful tier: {{ groups['workers'][0] }}
+            - Label: workload.homelab/tier=stateful
+            - Label: workload.homelab/storage-capable=true
+            - Scheduling: Preference-based affinity (NO taints)
+
+          Stateless tier: {{ groups['workers'][1:] | join(', ') }}
+            - Label: workload.homelab/tier=stateless
+            - Label: workload.homelab/storage-capable=false
+            - Scheduling: Preference-based affinity (NO taints)
+
+          Architecture:
+          - Uses node affinity preferences instead of hard taints
+          - Priority classes for workload prioritization
+          - Only control-plane taint remains (prevents workloads on masters)
+
+          Next steps:
+          1. Deploy priority classes via ArgoCD
+          2. Deploy ArgoCD applications with node affinity configuration
+          3. Verify pods schedule correctly: kubectl get pods -A -o wide
+          4. Monitor cluster health for first 24 hours

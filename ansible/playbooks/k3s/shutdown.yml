@@ -1,0 +1,359 @@
+---
+# ============================================================================
+# Graceful K3s Cluster Shutdown (Three-Tier Architecture Aware)
+# ============================================================================
+# This playbook safely shuts down the K3s cluster with awareness of the
+# three-tier architecture (infrastructure/stateful/stateless).
+#
+# Shutdown strategy:
+#   1. Verify tier labels exist on all nodes
+#   2. Drain stateless tier (workers 2-3) - pods can move to any tier
+#   3. Drain stateful tier (worker-1) - pods move to masters if tolerated
+#   4. Drain infrastructure tier (masters 2-3) - pods move to master-1
+#   5. Stop services in reverse dependency order
+#   6. Shutdown VMs
+#
+# Usage:
+#   cd /home/user/projects/proxmox-infra/ansible
+#   ansible-playbook -i k3s/inventory/hosts.yml \
+#                    -i k3s/inventory/workload-tiers.yml \
+#                    playbooks/k3s/shutdown-cluster-tiered.yml
+# ============================================================================
+
+- name: Pre-shutdown validation
+  hosts: localhost
+  gather_facts: false
+  vars:
+    control_node: "{{ groups['masters'][0] }}"
+
+  tasks:
+    - name: Display shutdown warning
+      ansible.builtin.pause:
+        prompt: |
+          ⚠️  WARNING: This will shut down your entire K3s cluster!
+
+          Three-tier shutdown order:
+          1. Drain stateless tier (workers 2-3) → pods move to other tiers
+          2. Drain stateful tier (worker-1) → pods move to masters if tolerated
+          3. Drain infrastructure tier (masters 2-3) → pods move to master-1
+          4. Stop K3s services on workers
+          5. Stop K3s services on masters (reverse order)
+          6. Shutdown worker VMs
+          7. Shutdown master VMs (reverse order)
+
+          Press Ctrl+C then 'A' to abort, or Enter to continue...
+        seconds: 10
+
+    - name: Verify cluster is accessible
+      ansible.builtin.command: kubectl get nodes
+      delegate_to: "{{ control_node }}"
+      environment:
+        KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+      changed_when: false
+      register: cluster_check
+      failed_when: cluster_check.rc != 0
+
+    - name: Check for workload-tier labels
+      ansible.builtin.shell: |
+        kubectl get nodes -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.metadata.labels.workload-tier}{"\n"}{end}'
+      delegate_to: "{{ control_node }}"
+      environment:
+        KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+      changed_when: false
+      register: tier_labels
+
+    - name: Display current tier configuration
+      ansible.builtin.debug:
+        msg: "{{ tier_labels.stdout_lines }}"
+
+    - name: Warn if tier labels are missing
+      ansible.builtin.debug:
+        msg: |
+          WARNING: Some nodes are missing workload-tier labels.
+          This may cause drain operations to be less safe.
+          Consider running apply-workload-tiers.yml first.
+      when: "'<none>' in tier_labels.stdout or tier_labels.stdout == ''"
+
+    - name: Check for running pods (excluding system)
+      ansible.builtin.shell: |
+        set -o pipefail
+        kubectl get pods -A --field-selector=status.phase=Running | grep -v "kube-system" | wc -l
+      args:
+        executable: /bin/bash
+      delegate_to: "{{ control_node }}"
+      environment:
+        KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+      register: running_pods_count
+      changed_when: false
+
+    - name: Display running pod count
+      ansible.builtin.debug:
+        msg: "Running applications count: {{ running_pods_count.stdout }}"
+
+    - name: Save cluster state
+      ansible.builtin.shell: |
+        kubectl get all -A > /tmp/cluster-state-before-shutdown-{{ ansible_date_time.iso8601 }}.txt
+      delegate_to: localhost
+      changed_when: false
+
+# ============================================================================
+# Phase 1: Drain Stateless Tier (workers 2-3)
+# ============================================================================
+- name: Drain stateless tier nodes
+  hosts: localhost
+  gather_facts: false
+  vars:
+    control_node: "{{ groups['masters'][0] }}"
+
+  tasks:
+    - name: Check if stateless tier exists
+      ansible.builtin.set_fact:
+        has_stateless: "{{ groups['stateless_tier'] is defined and groups['stateless_tier'] | length > 0 }}"
+
+    - name: Cordon stateless tier nodes
+      ansible.builtin.command: kubectl cordon {{ item }}
+      loop: "{{ groups['stateless_tier'] }}"
+      delegate_to: "{{ control_node }}"
+      environment:
+        KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+      changed_when: true
+      when: has_stateless
+
+    - name: Drain stateless tier nodes (safe - pods can move anywhere)
+      ansible.builtin.command: >
+        kubectl drain {{ item }}
+        --ignore-daemonsets
+        --delete-emptydir-data
+        --grace-period=60
+        --timeout=10m
+      loop: "{{ groups['stateless_tier'] }}"
+      delegate_to: "{{ control_node }}"
+      environment:
+        KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+      register: drain_stateless
+      changed_when: true
+      failed_when: drain_stateless.rc != 0
+      when: has_stateless
+
+    - name: Wait for pods to migrate from stateless tier
+      ansible.builtin.pause:
+        seconds: 15
+        prompt: "Waiting for stateless pods to migrate..."
+      when: has_stateless
+
+# ============================================================================
+# Phase 2: Drain Stateful Tier (worker-1)
+# ============================================================================
+- name: Drain stateful tier nodes
+  hosts: localhost
+  gather_facts: false
+  vars:
+    control_node: "{{ groups['masters'][0] }}"
+
+  tasks:
+    - name: Check if stateful tier exists
+      ansible.builtin.set_fact:
+        has_stateful: "{{ groups['stateful_tier'] is defined and groups['stateful_tier'] | length > 0 }}"
+
+    - name: Cordon stateful tier nodes
+      ansible.builtin.command: kubectl cordon {{ item }}
+      loop: "{{ groups['stateful_tier'] }}"
+      delegate_to: "{{ control_node }}"
+      environment:
+        KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+      changed_when: true
+      when: has_stateful
+
+    - name: Check for pods with PVCs on stateful tier
+      ansible.builtin.shell: |
+        set -o pipefail
+        kubectl get pods -A -o json | \
+        jq -r '.items[] | select(.spec.nodeName=="{{ item }}") | select(.spec.volumes[]?.persistentVolumeClaim) | "\(.metadata.namespace)/\(.metadata.name)"'
+      args:
+        executable: /bin/bash
+      loop: "{{ groups['stateful_tier'] }}"
+      delegate_to: "{{ control_node }}"
+      environment:
+        KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+      register: stateful_pods
+      changed_when: false
+      when: has_stateful
+
+    - name: Display warning about stateful pods
+      ansible.builtin.debug:
+        msg: |
+          WARNING: Found pods with PVCs on {{ item.item }}:
+          {{ item.stdout_lines }}
+          These pods may not reschedule until the node comes back online.
+      loop: "{{ stateful_pods.results }}"
+      when:
+        - has_stateful
+        - item.stdout_lines is defined
+        - item.stdout_lines | length > 0
+
+    - name: Drain stateful tier nodes (may leave some pods pending)
+      ansible.builtin.command: >
+        kubectl drain {{ item }}
+        --ignore-daemonsets
+        --delete-emptydir-data
+        --grace-period=120
+        --timeout=15m
+        --disable-eviction
+        --force
+      loop: "{{ groups['stateful_tier'] }}"
+      delegate_to: "{{ control_node }}"
+      environment:
+        KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+      register: drain_stateful
+      changed_when: true
+      failed_when: false # Allow partial drain for pods with PVCs
+      when: has_stateful
+
+    - name: Wait for pods to migrate from stateful tier
+      ansible.builtin.pause:
+        seconds: 30
+        prompt: "Waiting for stateful pods to migrate (some may stay pending)..."
+      when: has_stateful
+
+# ============================================================================
+# Phase 3: Drain Infrastructure Tier (masters 2-3)
+# ============================================================================
+- name: Drain infrastructure tier nodes
+  hosts: localhost
+  gather_facts: false
+  vars:
+    control_node: "{{ groups['masters'][0] }}"
+
+  tasks:
+    - name: Get masters to drain (all except first)
+      ansible.builtin.set_fact:
+        masters_to_drain: "{{ groups['infrastructure_tier'][1:] }}"
+      when: groups['infrastructure_tier'] | length > 1
+
+    - name: Cordon infrastructure tier nodes (except first master)
+      ansible.builtin.command: kubectl cordon {{ item }}
+      loop: "{{ masters_to_drain }}"
+      delegate_to: "{{ control_node }}"
+      environment:
+        KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+      changed_when: true
+      when: groups['infrastructure_tier'] | length > 1
+
+    - name: Drain infrastructure tier nodes (pods move to master-1)
+      ansible.builtin.command: >
+        kubectl drain {{ item }}
+        --ignore-daemonsets
+        --delete-emptydir-data
+        --grace-period=60
+        --timeout=10m
+      loop: "{{ masters_to_drain }}"
+      delegate_to: "{{ control_node }}"
+      environment:
+        KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+      register: drain_infrastructure
+      changed_when: true
+      failed_when: false # Allow partial drain for stubborn pods (e.g., Longhorn instance-managers)
+      when: groups['infrastructure_tier'] | length > 1
+
+    - name: Wait for pods to migrate to master-1
+      ansible.builtin.pause:
+        seconds: 20
+        prompt: "Waiting for infrastructure pods to migrate to master-1..."
+      when: groups['infrastructure_tier'] | length > 1
+
+# ============================================================================
+# Phase 4: Stop K3s Services
+# ============================================================================
+- name: Stop K3s agent on stateless tier
+  hosts: stateless_tier
+  become: true
+  serial: 1
+  tasks:
+    - name: Stop K3s agent service
+      ansible.builtin.systemd:
+        name: k3s-agent
+        state: stopped
+
+    - name: Run K3s killall script
+      ansible.builtin.command: /usr/local/bin/k3s-killall.sh
+      changed_when: true
+      failed_when: false
+
+- name: Stop K3s agent on stateful tier
+  hosts: stateful_tier
+  become: true
+  serial: 1
+  tasks:
+    - name: Stop K3s agent service
+      ansible.builtin.systemd:
+        name: k3s-agent
+        state: stopped
+
+    - name: Run K3s killall script
+      ansible.builtin.command: /usr/local/bin/k3s-killall.sh
+      changed_when: true
+      failed_when: false
+
+- name: Stop K3s server on masters
+  hosts: infrastructure_tier
+  become: true
+  serial: 1
+  order: reverse_sorted
+  tasks:
+    - name: Stop K3s server service
+      ansible.builtin.systemd:
+        name: k3s
+        state: stopped
+
+    - name: Wait for K3s to stop
+      ansible.builtin.pause:
+        seconds: 10
+
+# ============================================================================
+# Phase 5: Shutdown VMs
+# ============================================================================
+- name: Shutdown worker nodes
+  hosts: all_workers
+  become: true
+  serial: 1
+  gather_facts: false
+  tasks:
+    - name: Shutdown worker node
+      ansible.builtin.command: shutdown -h now
+      async: 0
+      poll: 0
+      changed_when: true
+      failed_when: false
+
+- name: Shutdown master nodes
+  hosts: infrastructure_tier
+  become: true
+  serial: 1
+  order: reverse_sorted
+  gather_facts: false
+  tasks:
+    - name: Shutdown master node
+      ansible.builtin.command: shutdown -h now
+      async: 0
+      poll: 0
+      changed_when: true
+      failed_when: false
+
+- name: Shutdown summary
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: Display shutdown completion
+      ansible.builtin.debug:
+        msg: |
+          ✓ K3s cluster shutdown initiated successfully!
+
+          Shutdown order executed:
+          1. Stateless tier drained: {{ groups['stateless_tier'] | join(', ') }}
+          2. Stateful tier drained: {{ groups['stateful_tier'] | join(', ') }}
+          3. Infrastructure tier drained: {{ groups['infrastructure_tier'][1:] | join(', ') }}
+          4. K3s services stopped on all nodes
+          5. VMs shutdown in reverse dependency order
+
+          All nodes are shutting down now.
+          Wait 2-3 minutes before performing Proxmox maintenance.

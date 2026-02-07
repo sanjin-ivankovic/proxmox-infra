@@ -1,0 +1,105 @@
+---
+# ansible/roles/common_system/tasks/main.yml
+
+- name: Validate prerequisites
+  tags: [always]
+  block:
+    - name: Validate OS distribution
+      ansible.builtin.assert:
+        that:
+          - ansible_facts["distribution"] in common_system_supported_distributions
+        fail_msg: "Unsupported OS: {{ ansible_facts['distribution'] }}. Requires: {{ common_system_supported_distributions | join(', ') }}"
+        quiet: true
+
+    - name: Validate Debian version
+      ansible.builtin.assert:
+        that:
+          - ansible_facts["distribution_major_version"] | int >= common_system_debian_version_min | int
+        fail_msg: "Debian {{ ansible_facts['distribution_major_version'] }} not supported. Requires Debian {{ common_system_debian_version_min }}+"
+        quiet: true
+      when: ansible_facts["distribution"] == "Debian"
+
+    - name: Validate Ubuntu version
+      ansible.builtin.assert:
+        that:
+          - ansible_facts["distribution_major_version"] | int >= common_system_ubuntu_version_min | int
+        fail_msg: "Ubuntu {{ ansible_facts['distribution_major_version'] }} not supported. Requires Ubuntu {{ common_system_ubuntu_version_min }}+"
+        quiet: true
+      when: ansible_facts["distribution"] == "Ubuntu"
+
+- name: Check network connectivity
+  tags: [always, network]
+  ansible.builtin.wait_for:
+    host: "{{ common_system_network_check_host }}"
+    port: 443
+    timeout: "{{ common_system_network_check_timeout }}"
+  when: common_system_network_check_enabled | bool
+  changed_when: false
+
+- name: Setup backup directory
+  tags: [backup, setup]
+  ansible.builtin.file:
+    path: "{{ common_system_backup_dir }}"
+    state: directory
+    mode: '0700'
+    owner: root
+    group: root
+
+- name: Backup SSH configuration
+  tags: [backup, ssh]
+  ansible.builtin.copy:
+    src: /etc/ssh/sshd_config
+    dest: "{{ common_system_backup_dir }}/sshd_config.{{ ansible_facts['date_time']['iso8601_basic_short'] }}"
+    remote_src: true
+    mode: '0600'
+    force: false
+  when: common_system_backup_sshd_config | bool
+  failed_when: false
+
+- name: Update APT cache and upgrade packages
+  tags: [packages, update]
+  ansible.builtin.apt:
+    update_cache: true
+    upgrade: "{{ common_system_apt_upgrade_strategy }}"
+    cache_valid_time: "{{ common_system_apt_cache_valid_time }}"
+    autoremove: true
+    autoclean: true
+    install_recommends: "{{ common_system_apt_install_recommends }}"
+    force_apt_get: "{{ common_system_apt_force_apt_get }}"
+  retries: 3
+  delay: 5
+  register: common_system_apt_result
+  until: common_system_apt_result is succeeded
+
+- name: Install required system packages
+  tags: [packages, install]
+  ansible.builtin.apt:
+    name: "{{ common_system_required_packages }}"
+    state: present
+    install_recommends: "{{ common_system_apt_install_recommends }}"
+    force_apt_get: "{{ common_system_apt_force_apt_get }}"
+  retries: 2
+  delay: 3
+  register: common_system_packages_result
+  until: common_system_packages_result is succeeded
+
+- name: Install optional system packages
+  tags: [packages, optional]
+  ansible.builtin.apt:
+    name: "{{ common_system_optional_packages }}"
+    state: present
+    install_recommends: "{{ common_system_apt_install_recommends }}"
+    force_apt_get: "{{ common_system_apt_force_apt_get }}"
+  when: common_system_install_optional | bool
+
+- name: Configure ping capability for non-root users
+  tags: [capabilities, security]
+  ansible.builtin.command: setcap cap_net_raw+p /bin/ping
+  changed_when: false
+  when: common_system_enable_ping_capability | bool
+
+- name: Configure timezone
+  tags: [timezone, system]
+  community.general.timezone:
+    name: "{{ common_system_timezone }}"
+  when: common_system_configure_timezone | bool

@@ -1,0 +1,98 @@
+---
+# Ansible-lint configuration for Proxmox project
+# Documentation: https://ansible-lint.readthedocs.io/
+
+# Enforce specific profile (min, basic, moderate, safety, shared, production)
+# We use 'production' for strictest checks
+profile: production
+
+# Exclude paths from linting
+exclude_paths:
+  - .ansible/
+  - .ansible_facts/
+  - inventory/terraform.yml # Auto-generated from Terraform
+  - .cache/
+  - .git/
+  - generated/
+
+# Enable offline mode (don't check for updates)
+offline: false
+
+# Skip syntax check to avoid inventory loading (terraform_inventory.py hangs)
+skip_action_validation: true
+
+# Enable progressive mode (show percentage of fixed issues)
+progressive: false
+
+# Quiet mode (only show errors)
+quiet: false
+
+# Use default rules set
+# See: https://ansible-lint.readthedocs.io/rules/
+rulesdir: []
+
+# Skip specific rules (with justification)
+skip_list:
+  # We use shortened role names (system, users, ssh, docker) for brevity
+  # Full names would be: system_setup, user_management, ssh_hardening, docker_setup
+  - role-name[path] # Role names should follow role-name format
+
+  # Some legitimate uses of command/shell modules where specific modules don't exist
+  - command-instead-of-module # Sometimes command is the right tool
+
+  # We have some legacy variable names that are clearer without prefixes
+  # - var-naming[no-role-prefix]  # Uncomment to disable variable prefix enforcement
+
+  # Skip internal errors from ansible-playbook syntax-check (vault file issues during linting)
+  - internal-error
+
+# Only check specific tags (none = check all)
+tags: []
+
+# Enable specific rules (empty = use defaults)
+enable_list: []
+
+# Warn only for specific rules (don't fail)
+warn_list:
+  - experimental # Warn about experimental features
+  - no-changed-when # Warn if command tasks lack changed_when
+  - risky-file-permissions # Warn about files without explicit mode
+
+# Ansible-specific settings
+# Playbooks are in project subdirectories, roles are centralized at root
+kinds:
+  - playbook: "playbooks/*/*.yml"
+  - playbook: "playbooks/*/*.yaml"
+  - tasks: "roles/*/tasks/**/*.yml"
+  - handlers: "roles/*/handlers/**/*.yml"
+  - vars: "group_vars/**/*.yml"
+  - vars: "host_vars/**/*.yml"
+  - meta: "roles/*/meta/**/*.yml"
+
+# Strict mode (fail on warnings)
+strict: false
+
+# Write output to file (disabled)
+# output_file: ansible-lint.log
+
+# Verbosity level (0-3)
+verbosity: 0
+
+# Mock modules and roles (for testing)
+# mock_modules: []
+# mock_roles: []
+
+# Task settings
+task_name_prefix: "{stem} | " # Prefix task names with role stem
+
+# Minimum required Ansible version
+# min_version: "2.9"
+
+# Maximum allowed block nesting
+# max_block_depth: 20
+
+# Ignore known false positives
+# skip_ansible_syntax_check: false
+
+# Git ignore settings (respect .gitignore)
+use_default_rules: true

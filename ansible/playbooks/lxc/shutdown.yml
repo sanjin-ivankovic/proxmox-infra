@@ -1,0 +1,23 @@
+---
+# playbooks/lxc/shutdown.yml
+# Graceful shutdown of LXC containers
+
+- name: Graceful Shutdown LXC Hosts
+  hosts: all
+  become: true
+  gather_facts: false
+  vars:
+    ansible_user: maintainer
+    shutdown_delay: 1 # minutes
+
+  tasks:
+    - name: Shutdown host
+      ansible.builtin.command: shutdown -h +{{ shutdown_delay }} "System shutting down via Ansible"
+      async: 0
+      poll: 0
+      changed_when: true
+      failed_when: false # Connection may drop immediately
+
+    - name: Display shutdown confirmation
+      ansible.builtin.debug:
+        msg: '✓ Shutdown initiated for {{ inventory_hostname }} (scheduled in {{ shutdown_delay }} minute)'

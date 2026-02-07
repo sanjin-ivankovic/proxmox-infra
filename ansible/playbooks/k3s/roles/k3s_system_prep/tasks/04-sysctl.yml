@@ -1,0 +1,33 @@
+---
+# roles/k3s_system_prep/tasks/04-sysctl.yml
+
+# Load required kernel modules needed for Kubernetes networking and overlay support
+- name: Load required kernel modules for Kubernetes
+  community.general.modprobe:
+    name: '{{ item }}'
+    state: present
+  loop:
+    - br_netfilter
+    - overlay
+  when: k3s_system_prep_load_kernel_modules | default(true) | bool
+
+# Ensure required kernel modules are loaded automatically at boot for persistence
+- name: Ensure kernel modules are loaded at boot
+  ansible.builtin.copy:
+    content: |
+      br_netfilter
+      overlay
+    dest: /etc/modules-load.d/k3s.conf
+    mode: '0644'
+  when: k3s_system_prep_persist_modules | default(true) | bool
+
+# Apply recommended sysctl settings for Kubernetes networking and security
+- name: Configure sysctl parameters
+  ansible.posix.sysctl:
+    name: '{{ item.name }}'
+    value: '{{ item.value }}'
+    sysctl_set: true
+    state: present
+    reload: true
+  loop: '{{ k3s_system_prep_sysctl_settings }}'
+  when: k3s_system_prep_sysctl_settings is defined

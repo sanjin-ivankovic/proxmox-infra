@@ -1,0 +1,165 @@
+---
+# ansible/roles/common_podman/tasks/main.yml
+
+- name: Install Podman packages
+  tags: [podman, install, packages]
+  ansible.builtin.apt:
+    name: "{{ common_podman_packages }}"
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+  retries: 2
+  delay: 3
+  register: common_podman_packages_result
+  until: common_podman_packages_result is succeeded
+
+- name: Get user information
+  tags: [always]
+  ansible.builtin.getent:
+    database: passwd
+    key: "{{ common_podman_user }}"
+  register: common_podman_user_info
+
+- name: Set user facts
+  tags: [always]
+  ansible.builtin.set_fact:
+    common_podman_user_home: "{{ common_podman_user_info.ansible_facts.getent_passwd[common_podman_user][4] }}"
+    common_podman_puid: "{{ common_podman_user_info.ansible_facts.getent_passwd[common_podman_user][1] }}"
+    common_podman_pgid: "{{ common_podman_user_info.ansible_facts.getent_passwd[common_podman_user][2] }}"
+
+- name: Create system config directory
+  tags: [podman, config]
+  ansible.builtin.file:
+    path: "{{ common_podman_config_dir }}"
+    state: directory
+    mode: '0755'
+    owner: root
+    group: root
+
+- name: Create user config directory
+  tags: [podman, config]
+  ansible.builtin.file:
+    path: "{{ common_podman_user_home }}/.config/containers"
+    state: directory
+    mode: '0755'
+    owner: "{{ common_podman_user }}"
+    group: "{{ common_podman_user }}"
+
+- name: Configure Podman containers
+  tags: [podman, config]
+  ansible.builtin.template:
+    src: containers.conf.j2
+    dest: "{{ common_podman_user_home }}/.config/containers/containers.conf"
+    owner: "{{ common_podman_user }}"
+    group: "{{ common_podman_user }}"
+    mode: '0644'
+
+- name: Configure Podman registries
+  tags: [podman, config]
+  ansible.builtin.template:
+    src: registries.conf.j2
+    dest: "{{ common_podman_user_home }}/.config/containers/registries.conf"
+    owner: "{{ common_podman_user }}"
+    group: "{{ common_podman_user }}"
+    mode: '0644'
+
+- name: Create Podman directory structure
+  tags: [podman, directories]
+  ansible.builtin.file:
+    path: "{{ common_podman_dir }}"
+    state: directory
+    mode: '0755'
+    owner: "{{ common_podman_user }}"
+    group: "{{ common_podman_user }}"
+
+- name: Create README
+  tags: [podman, docs]
+  ansible.builtin.template:
+    src: README.md.j2
+    dest: "{{ common_podman_dir }}/README.md"
+    owner: "{{ common_podman_user }}"
+    group: "{{ common_podman_user }}"
+    mode: '0644'
+  when: common_podman_create_readme | bool
+
+- name: Enable user lingering
+  tags: [podman, rootless]
+  ansible.builtin.command:
+    cmd: loginctl enable-linger {{ common_podman_user }}
+  register: common_podman_linger_result
+  changed_when: common_podman_linger_result.rc == 0
+  failed_when: false
+  when: common_podman_enable_user_lingering | bool
+
+- name: Enable Podman socket
+  tags: [podman, socket]
+  ansible.builtin.systemd:
+    name: podman.socket
+    enabled: true
+    state: started
+    scope: user
+  become: true
+  become_user: "{{ common_podman_user }}"
+  environment:
+    XDG_RUNTIME_DIR: "/run/user/{{ common_podman_puid }}"
+  when: common_podman_enable_socket | bool
+  failed_when: false
+
+- name: Configure environment variables
+  tags: [podman, config, environment]
+  ansible.builtin.lineinfile:
+    path: "{{ common_podman_user_home }}/.bashrc"
+    line: "{{ item }}"
+    regexp: "^export {{ item.split('=')[0] }}="
+    state: present
+    owner: "{{ common_podman_user }}"
+    group: "{{ common_podman_user }}"
+    mode: '0644'
+    create: true
+  loop:
+    - "export XDG_RUNTIME_DIR=/run/user/$(id -u)"
+    - "export DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$(id -u)/bus"
+  when: common_podman_export_runtime_dir | bool
+
+- name: Deploy Podman aliases
+  tags: [podman, config, aliases]
+  when: common_podman_deploy_aliases | bool
+  block:
+    - name: Copy aliases file
+      ansible.builtin.copy:
+        src: podman_aliases
+        dest: "{{ common_podman_user_home }}/.podman_aliases"
+        owner: "{{ common_podman_user }}"
+        group: "{{ common_podman_user }}"
+        mode: '0644'
+
+    - name: Source aliases in bashrc
+      ansible.builtin.lineinfile:
+        path: "{{ common_podman_user_home }}/.bashrc"
+        line: "[ -f ~/.podman_aliases ] && source ~/.podman_aliases"
+        regexp: "^.*source.*\\.podman_aliases"
+        state: present
+        owner: "{{ common_podman_user }}"
+        group: "{{ common_podman_user }}"
+        mode: '0644'
+        create: true
+
+- name: Verify Podman installation
+  tags: [podman, verify]
+  when: common_podman_verify_installation | bool
+  block:
+    - name: Check Podman version
+      ansible.builtin.command: podman --version
+      register: common_podman_version
+      changed_when: false
+
+    - name: Check Podman Compose version
+      ansible.builtin.command: podman-compose --version
+      register: common_podman_compose_version
+      changed_when: false
+
+    - name: Display versions
+      ansible.builtin.debug:
+        msg:
+          - "Podman: {{ common_podman_version.stdout }}"
+          - "Podman Compose: {{ common_podman_compose_version.stdout }}"

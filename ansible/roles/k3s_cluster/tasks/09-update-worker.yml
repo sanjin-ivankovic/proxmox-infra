@@ -1,0 +1,338 @@
+---
+# roles/k3s_cluster_cluster/tasks/09-update-worker.yml
+# Worker update with proper draining and uncordoning
+
+- name: Display worker update start
+  ansible.builtin.debug:
+    msg: 'Starting update of worker {{ inventory_hostname }}'
+  tags: [update]
+
+- name: Debug agent extra args
+  ansible.builtin.debug:
+    msg: 'Agent extra args: {{ k3s_cluster_agent_extra_args }}'
+  tags: [update]
+
+# Drain the node before update
+- name: Drain worker node before update (with retries)
+  ansible.builtin.shell: |
+    set -o pipefail
+    /usr/local/bin/kubectl drain {{ inventory_hostname }} \
+      --ignore-daemonsets \
+      --delete-emptydir-data \
+      --force \
+      --grace-period=60 \
+      --timeout=300s \
+      --disable-eviction \
+      --skip-wait-for-delete-timeout=30
+  args:
+    executable: /bin/bash
+  register: k3s_cluster_drain_result
+  delegate_to: "{{ groups['masters'][0] }}"
+  environment:
+    KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+  when: not ansible_check_mode
+  changed_when: false
+  failed_when: false  # Don't fail on drain issues
+  retries: 3
+  delay: 30
+  tags: [update]
+
+- name: Show drain result
+  ansible.builtin.debug:
+    var: k3s_cluster_drain_result
+  tags: [update]
+
+- name: Force drain if normal drain failed
+  ansible.builtin.shell: |
+    set -o pipefail
+    /usr/local/bin/kubectl delete pods --all --namespace=longhorn-system \
+      --field-selector=spec.nodeName={{ inventory_hostname }} \
+      --force --grace-period=0 || true
+    /usr/local/bin/kubectl cordon {{ inventory_hostname }}
+  args:
+    executable: /bin/bash
+  delegate_to: "{{ groups['masters'][0] }}"
+  environment:
+    KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+  when:
+    - not ansible_check_mode
+    - k3s_cluster_drain_result.rc != 0
+  changed_when: false
+  failed_when: false
+  tags: [update]
+
+- name: Wait for pods to be evicted
+  ansible.builtin.pause:
+    seconds: 30
+  tags: [update]
+
+# Stop K3s agent service cleanly
+- name: Stop K3s agent service cleanly
+  ansible.builtin.service:
+    name: k3s-agent
+    state: stopped
+  when: not ansible_check_mode
+  failed_when: false # Don't fail if service doesn't exist
+  tags: [update]
+
+# Use K3s official cleanup script
+- name: Run K3s killall script to clean up processes
+  ansible.builtin.command: /usr/local/bin/k3s-killall.sh
+  when: not ansible_check_mode
+  changed_when: false
+  failed_when: false
+  tags: [update]
+
+# Wait for processes to die
+- name: Wait for K3s processes to terminate
+  ansible.builtin.pause:
+    seconds: 10
+  tags: [update]
+
+# Get remaining K3s process PIDs
+- name: Get remaining K3s process PIDs
+  ansible.builtin.shell: |
+    set -o pipefail
+    pgrep -f 'k3s' || true
+  args:
+    executable: /bin/bash
+  register: k3s_cluster_pids
+  changed_when: false
+  when: not ansible_check_mode
+  tags: [update]
+
+- name: Force kill remaining K3s processes if any
+  ansible.builtin.shell: |
+    set -o pipefail
+    if [ -n "{{ k3s_cluster_pids.stdout }}" ]; then
+      echo "Force killing PIDs: {{ k3s_cluster_pids.stdout }}"
+      for pid in {{ k3s_cluster_pids.stdout }}; do
+        if kill -0 "$pid" 2>/dev/null; then
+          echo "Killing PID: $pid"
+          kill -9 "$pid" 2>/dev/null || true
+        else
+          echo "PID $pid already gone"
+        fi
+      done
+    fi
+  args:
+    executable: /bin/bash
+  when:
+    - not ansible_check_mode
+    - k3s_cluster_pids.stdout | length > 0
+  changed_when: false
+  failed_when: false
+  tags: [update]
+
+# Download and install updated K3s
+- name: Download K3s installer
+  ansible.builtin.get_url:
+    url: '{{ k3s_cluster_install_script_url }}'
+    dest: /tmp/k3s-install.sh
+    mode: '0755'
+  when: not ansible_check_mode
+  tags: [update]
+
+# Set proper environment for agent installation
+- name: Set K3s agent installation environment
+  ansible.builtin.set_fact:
+    k3s_cluster_agent_env:
+      INSTALL_K3S_VERSION: '{{ k3s_cluster_version }}'
+      INSTALL_K3S_CHANNEL: '{{ k3s_cluster_channel }}'
+      INSTALL_K3S_EXEC: 'agent {{ k3s_cluster_agent_extra_args }}'
+      K3S_URL: '{{ k3s_cluster_endpoint }}'
+      K3S_TOKEN: '{{ k3s_cluster_token }}'
+  tags: [update]
+
+# - name: Debug installation environment
+#   ansible.builtin.debug:
+#     var: k3s_cluster_agent_env
+#   tags: [update]
+
+# Update K3s agent
+- name: Update K3s agent
+  ansible.builtin.shell: |
+    set -o pipefail
+    /tmp/k3s-install.sh
+  args:
+    executable: /bin/bash
+  when: not ansible_check_mode
+  environment: '{{ k3s_cluster_agent_env }}'
+  register: k3s_cluster_agent_update
+  failed_when: k3s_cluster_agent_update.rc != 0
+  changed_when: k3s_cluster_agent_update.rc == 0 and k3s_cluster_needs_update | bool
+  tags: [update]
+
+- name: Show agent installation output
+  ansible.builtin.debug:
+    var: k3s_cluster_agent_update.stdout_lines
+  when: k3s_cluster_agent_update.stdout_lines is defined
+  tags: [update]
+
+# Verify K3s binary was updated
+- name: Verify K3s binary version after update
+  ansible.builtin.command: /usr/local/bin/k3s --version
+  register: k3s_cluster_binary_version
+  changed_when: false
+  failed_when: k3s_cluster_version not in k3s_cluster_binary_version.stdout
+  tags: [update]
+
+- name: Display binary version
+  ansible.builtin.debug:
+    msg: 'K3s binary version: {{ k3s_cluster_binary_version.stdout_lines[0] }}'
+  tags: [update]
+
+# Check agent service status
+- name: Check if k3s-agent service is active
+  ansible.builtin.systemd:
+    name: k3s-agent
+  register: k3s_cluster_agent_service_check
+  tags: [update]
+
+- name: Display service status
+  ansible.builtin.debug:
+    msg: 'K3s agent service status: {{ k3s_cluster_agent_service_check.status.ActiveState }}'
+  tags: [update]
+
+# Start service if it's not running
+- name: Start K3s agent service if not running
+  ansible.builtin.service:
+    name: k3s-agent
+    state: started
+    enabled: true
+  when:
+    - not ansible_check_mode
+    - k3s_cluster_agent_service_check.status.ActiveState != "active"
+  tags: [update]
+
+# Get logs for debugging
+- name: Get K3s agent service logs
+  ansible.builtin.shell: |
+    set -o pipefail
+    journalctl -u k3s-agent --no-pager -n 50 --since "2 minutes ago"
+  args:
+    executable: /bin/bash
+  register: k3s_cluster_agent_logs
+  when: not ansible_check_mode
+  changed_when: false
+  failed_when: false
+  tags: [update]
+
+- name: Show agent logs
+  ansible.builtin.debug:
+    var: k3s_cluster_agent_logs.stdout_lines
+  when:
+    - k3s_cluster_agent_logs.stdout_lines is defined
+    - k3s_cluster_agent_logs.stdout_lines | length > 0
+  tags: [update]
+
+# Test connectivity to master before waiting for registration
+- name: Test connectivity to K3s API
+  ansible.builtin.uri:
+    url: '{{ k3s_cluster_endpoint }}/ping'
+    method: GET
+    validate_certs: false
+    timeout: 10
+  register: k3s_cluster_api_test
+  failed_when: false
+  tags: [update]
+
+- name: Display API connectivity test
+  ansible.builtin.debug:
+    msg: 'API connectivity: {{ k3s_cluster_api_test.status | default("failed") }}'
+  tags: [update]
+
+- name: Fail if API is not reachable
+  ansible.builtin.fail:
+    msg: 'Cannot reach K3s API at {{ k3s_cluster_endpoint }}. Status: {{ k3s_cluster_api_test.status | default("connection failed") }}'
+  when: k3s_cluster_api_test.status | default(0) != 200
+  tags: [update]
+
+# Wait for agent to register
+- name: Wait for K3s agent to register (listen on 10250)
+  ansible.builtin.wait_for:
+    port: 10250
+    host: '{{ ansible_host }}'
+    delay: 30
+    timeout: 300
+  when: not ansible_check_mode
+  tags: [update]
+
+# Wait for node to appear in cluster
+- name: Wait for node to appear in cluster
+  ansible.builtin.shell: |
+    set -o pipefail
+    /usr/local/bin/kubectl get node {{ inventory_hostname }} --no-headers
+  args:
+    executable: /bin/bash
+  register: k3s_cluster_node_exists
+  retries: 20
+  delay: 15
+  until: k3s_cluster_node_exists.rc == 0
+  changed_when: false
+  delegate_to: "{{ groups['masters'][0] }}"
+  environment:
+    KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+  tags: [update]
+
+# Wait for node to become ready
+- name: Wait for node to be ready
+  ansible.builtin.shell: |
+    set -o pipefail
+    /usr/local/bin/kubectl get node {{ inventory_hostname }} -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}'
+  args:
+    executable: /bin/bash
+  register: k3s_cluster_node_ready
+  retries: 20
+  delay: 15
+  until: k3s_cluster_node_ready.stdout == "True"
+  changed_when: false
+  delegate_to: "{{ groups['masters'][0] }}"
+  environment:
+    KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+  tags: [update]
+
+# Uncordon the node
+- name: Uncordon worker node after update
+  ansible.builtin.shell: |
+    set -o pipefail
+    /usr/local/bin/kubectl uncordon {{ inventory_hostname }}
+  args:
+    executable: /bin/bash
+  register: k3s_cluster_uncordon_result
+  delegate_to: "{{ groups['masters'][0] }}"
+  environment:
+    KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+  when: not ansible_check_mode
+  changed_when: false
+  tags: [update]
+
+# Final verification
+- name: Verify updated K3s version on worker
+  ansible.builtin.command: /usr/local/bin/k3s --version
+  register: k3s_cluster_updated_version
+  changed_when: false
+  tags: [update]
+
+- name: Display updated version
+  ansible.builtin.debug:
+    msg: 'Worker {{ inventory_hostname }} updated to {{ k3s_cluster_updated_version.stdout_lines[0] }}'
+  tags: [update]
+
+- name: Verify node is ready in cluster
+  ansible.builtin.shell: |
+    set -o pipefail
+    /usr/local/bin/kubectl get node {{ inventory_hostname }} -o wide
+  args:
+    executable: /bin/bash
+  register: k3s_cluster_final_node_status
+  changed_when: false
+  delegate_to: "{{ groups['masters'][0] }}"
+  environment:
+    KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+  tags: [update]
+
+- name: Display final node status
+  ansible.builtin.debug:
+    var: k3s_cluster_final_node_status.stdout_lines
+  tags: [update]

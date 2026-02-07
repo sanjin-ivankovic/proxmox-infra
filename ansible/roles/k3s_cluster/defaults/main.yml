@@ -1,0 +1,66 @@
+---
+# roles/k3s_cluster/defaults/main.yml
+
+# Version of K3s to install (string, e.g. 'v1.32.4+k3s1')
+k3s_cluster_version: v1.34.3+k3s1
+
+# K3s release channel (string, e.g. 'stable', 'latest')
+k3s_cluster_channel: stable
+
+# Installer script URL (string)
+k3s_cluster_install_script_url: 'https://get.k3s.io'
+
+# Default components to enable/disable
+k3s_cluster_enable:
+  - metrics-server # Enable metrics server
+
+k3s_cluster_disable:
+  - traefik # Helm-managed Traefik will be used instead
+  - servicelb # MetalLB will be used instead
+
+# Shared secret token for cluster (string, set in Ansible Vault)
+# Must be set in group_vars/all/vault.yml or group_vars/k3s_cluster/vault.yml as k3s_cluster_token
+# k3s_cluster_token: ''
+
+# Endpoint for agents to join (string, set to control-plane IP, set in group_vars/all/main.yml)
+# k3s_cluster_endpoint: ''
+
+# External datastore endpoint (string, e.g. 'mysql://user:pass@tcp(host:3306)/dbname', 'postgres://user:pass@host:5432/dbname', or 'etcd endpoints')
+k3s_cluster_datastore_endpoint: '' # Example: 'etcd://10.0.0.1:2379,10.0.0.2:2379'
+
+# External datastore CA cert file (string, optional)
+k3s_cluster_datastore_cacert: '' # Example: '/etc/k3s/etcd/ca.crt'
+
+# External datastore cert file (string, optional)
+k3s_cluster_datastore_cert: '' # Example: '/etc/k3s/etcd/client.crt'
+
+# External datastore key file (string, optional)
+k3s_cluster_datastore_key: '' # Example: '/etc/k3s/etcd/client.key'
+
+# Extra arguments for server (string, appended to generated args)
+k3s_cluster_server_extra_args: '' # Example: '--disable-cloud-controller'
+
+# Extra arguments for agent (string)
+k3s_cluster_agent_extra_args: '--node-ip {{ ansible_host }}' # Example: '--node-ip 10.40.0.41'
+
+# TLS SANs for masters (list)
+k3s_cluster_master_tls_sans: >-
+  {%- set sans = [] -%}
+  {%- for host in groups['masters'] -%}
+    {%- set _ = sans.append(hostvars[host]['ansible_host']) -%}
+    {%- set _ = sans.append(host) -%}
+  {%- endfor -%}
+  {%- set _ = sans.extend(['localhost', '127.0.0.1']) -%}
+  {{ sans | list }}
+
+# Kubeconfig file permissions (string, e.g. '0644')
+k3s_cluster_write_kubeconfig_mode: '0644'
+
+# HA Configuration
+k3s_cluster_control_plane_endpoint: "{{ hostvars[groups['masters'][0]].ansible_host }}"
+
+# API server host (string, usually set from inventory)
+k3s_cluster_apiserver_host: '{{ k3s_cluster_control_plane_endpoint }}'
+
+# API server port (integer, default 6443)
+k3s_cluster_apiserver_port: 6443

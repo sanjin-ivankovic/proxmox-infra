@@ -1,0 +1,67 @@
+---
+# roles/k3s_system_prep/tasks/06-firewall.yml
+
+# Check if firewalld is installed on the system
+- name: Check if firewalld is installed
+  ansible.builtin.command: command -v firewalld
+  register: k3s_system_prep_firewalld_check
+  changed_when: false
+  failed_when: false
+  check_mode: false
+
+# Configure firewalld rules and ensure required ports are open if firewalld is present
+- name: Configure firewalld if installed
+  when:
+    - k3s_k3s_system_prep_firewalld_check.rc == 0
+    - k3s_system_prep_configure_firewall | default(true) | bool
+  block:
+    - name: Ensure firewalld is running and enabled
+      ansible.posix.firewalld:
+        service: ssh
+        permanent: true
+        state: enabled
+        immediate: true
+      when: ansible_facts.services['firewalld.service'] is defined
+
+    - name: Allow required TCP ports with firewalld
+      ansible.posix.firewalld:
+        port: '{{ item }}/tcp'
+        permanent: true
+        state: enabled
+        immediate: true
+      loop: '{{ k3s_system_prep_firewall_allowed_tcp_ports }}'
+      when: ansible_facts.services['firewalld.service'] is defined
+      notify: Reload firewalld
+
+# Check if ufw is installed on the system
+- name: Check if ufw is installed
+  ansible.builtin.command: command -v ufw
+  register: k3s_system_prep_ufw_check
+  changed_when: false
+  failed_when: false
+  check_mode: false
+
+# Configure ufw rules and ensure required ports are open if ufw is present and firewalld is not
+- name: Configure ufw if installed
+  when: >
+    k3s_system_prep_ufw_check.rc == 0 and
+    k3s_system_prep_firewalld_check.rc != 0 and
+    k3s_system_prep_configure_firewall | default(true) | bool
+  block:
+    - name: Ensure ufw is installed
+      ansible.builtin.package:
+        name: ufw
+        state: present
+
+    - name: Allow required TCP ports with ufw
+      community.general.ufw:
+        rule: allow
+        port: '{{ item }}'
+        proto: tcp
+      loop: '{{ k3s_system_prep_firewall_allowed_tcp_ports }}'
+      when: ansible_facts.services['ufw.service'] is defined
+
+    - name: Enable ufw
+      community.general.ufw:
+        state: enabled
+      when: ansible_facts.services['ufw.service'] is defined

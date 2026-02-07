@@ -1,0 +1,100 @@
+# ============================================================================
+# K3s Workload Tier Groupings
+# ============================================================================
+# This file extends the auto-generated hosts.yml with workload-tier sub-groups
+# for the three-tier architecture:
+#   - Infrastructure tier: Masters (control plane nodes)
+#   - Stateful tier: worker-1 (persistent storage workloads)
+#   - Stateless tier: workers 2-3 (ephemeral workloads)
+#
+# Label Schema:
+#   New Schema (Preferred):
+#     - workload.homelab/tier: infrastructure | stateful | stateless
+#     - workload.homelab/role: control-plane | worker
+#     - workload.homelab/storage-capable: "true" | "false"
+#
+#   Old Schema (Deprecated but supported):
+#     - workload-tier: infrastructure | stateful | stateless
+#
+# Scheduling Strategy:
+#   - Workload placement via node affinity using workload.homelab/* labels
+#   - Priority classes: critical-infrastructure, high-priority-stateful, normal-priority
+#
+# Usage: Include this file in playbooks alongside hosts.yml
+# ============================================================================
+
+all:
+  children:
+    # ========================================================================
+    # Infrastructure Tier (Control Plane)
+    # ========================================================================
+    # Hosts infrastructure components: ArgoCD, Traefik, MetalLB controller,
+    # Cert-Manager, Sealed Secrets, Prometheus Operator, etc.
+    #
+    # Taint: node-role.kubernetes.io/control-plane=true:NoSchedule (K3s default)
+    # Label: workload-tier=infrastructure
+    # ========================================================================
+    infrastructure_tier:
+      hosts:
+        k3s-master-1: {}
+        k3s-master-2: {}
+        k3s-master-3: {}
+      vars:
+        workload_tier: infrastructure
+        workload_tier_taint: false # Masters already have control-plane taint from K3s
+
+    # ========================================================================
+    # Stateful Tier (Persistent Storage)
+    # ========================================================================
+    # Hosts stateful workloads: PostgreSQL, Valkey, Keycloak, Garage,
+    # and other applications with persistent storage requirements.
+    #
+    # Scheduling: Affinity-based (workload.homelab/tier: stateful)
+    # Priority: high-priority-stateful
+    # Node Labels:
+    #   - workload.homelab/role: worker
+    #   - workload.homelab/tier: stateful
+    #   - workload.homelab/storage-capable: "true"
+    # ========================================================================
+    stateful_tier:
+      hosts:
+        k3s-worker-1: {}
+      vars:
+        workload_tier: stateful
+        workload_tier_taint: false # Affinity-based scheduling (no taints)
+
+    # ========================================================================
+    # Stateless Tier (Ephemeral Workloads)
+    # ========================================================================
+    # Hosts stateless applications: FreshRSS, IT-Tools, MySpeed, OmniTools,
+    # PrivateBin, SearXNG, Stirling-PDF, and other apps without persistent
+    # state requirements.
+    #
+    # Scheduling: Affinity-based (workload.homelab/tier: stateless)
+    # Priority: normal-priority
+    # Node Labels:
+    #   - workload.homelab/role: worker
+    #   - workload.homelab/tier: stateless
+    #   - workload.homelab/storage-capable: "false"
+    # ========================================================================
+    stateless_tier:
+      hosts:
+        k3s-worker-2: {}
+        k3s-worker-3: {}
+      vars:
+        workload_tier: stateless
+        workload_tier_taint: false # Affinity-based scheduling (no taints)
+
+    # ========================================================================
+    # Convenience Groups
+    # ========================================================================
+    all_workers:
+      children:
+        stateful_tier:
+        stateless_tier:
+
+    all_tiers:
+      children:
+        infrastructure_tier:
+        stateful_tier:
+        stateless_tier:

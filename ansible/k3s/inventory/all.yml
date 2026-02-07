@@ -1,0 +1,122 @@
+# ============================================================================
+# Combined K3s Inventory (hosts + workload tiers)
+# ============================================================================
+# This file combines both hosts.yml and workload-tiers.yml for use in
+# Semaphore and other automation tools that don't support multiple inventory
+# files easily.
+#
+# DO NOT EDIT - This file is auto-generated
+# To update: Regenerate by merging hosts.yml and workload-tiers.yml
+# ============================================================================
+
+all:
+  children:
+    # ========================================================================
+    # Host Definitions (from hosts.yml)
+    # ========================================================================
+    masters:
+      hosts:
+        k3s-master-1:
+          ansible_host: 10.40.0.40
+          ansible_user: root
+        k3s-master-2:
+          ansible_host: 10.40.0.41
+          ansible_user: root
+        k3s-master-3:
+          ansible_host: 10.40.0.42
+          ansible_user: root
+
+    workers:
+      hosts:
+        k3s-worker-1:
+          ansible_host: 10.40.0.50
+          ansible_user: root
+        k3s-worker-2:
+          ansible_host: 10.40.0.51
+          ansible_user: root
+        k3s-worker-3:
+          ansible_host: 10.40.0.52
+          ansible_user: root
+
+    k3s_cluster:
+      children:
+        masters:
+        workers:
+
+    proxmox_hosts:
+      children:
+        k3s_cluster:
+
+    # ========================================================================
+    # Infrastructure Tier (Control Plane)
+    # ========================================================================
+    # Hosts infrastructure components: ArgoCD, Traefik, MetalLB controller,
+    # Cert-Manager, Sealed Secrets, Prometheus Operator, etc.
+    #
+    # Taint: node-role.kubernetes.io/control-plane=true:NoSchedule (K3s default)
+    # Label: workload-tier=infrastructure
+    # ========================================================================
+    infrastructure_tier:
+      hosts:
+        k3s-master-1: {}
+        k3s-master-2: {}
+        k3s-master-3: {}
+      vars:
+        workload_tier: infrastructure
+        workload_tier_taint: false # Masters already have control-plane taint from K3s
+
+    # ========================================================================
+    # Stateful Tier (Persistent Storage)
+    # ========================================================================
+    # Hosts stateful workloads: PostgreSQL, Valkey, Keycloak, Garage,
+    # and other applications with persistent storage requirements.
+    #
+    # Scheduling: Affinity-based (workload.homelab/tier: stateful)
+    # Priority: high-priority-stateful
+    # Node Labels:
+    #   - workload.homelab/role: worker
+    #   - workload.homelab/tier: stateful
+    #   - workload.homelab/storage-capable: "true"
+    # ========================================================================
+    stateful_tier:
+      hosts:
+        k3s-worker-1: {}
+      vars:
+        workload_tier: stateful
+        workload_tier_taint: false # Affinity-based scheduling (no taints)
+
+    # ========================================================================
+    # Stateless Tier (Ephemeral Workloads)
+    # ========================================================================
+    # Hosts stateless applications: FreshRSS, IT-Tools, MySpeed, OmniTools,
+    # PrivateBin, SearXNG, Stirling-PDF, and other apps without persistent
+    # state requirements.
+    #
+    # Scheduling: Affinity-based (workload.homelab/tier: stateless)
+    # Priority: normal-priority
+    # Node Labels:
+    #   - workload.homelab/role: worker
+    #   - workload.homelab/tier: stateless
+    #   - workload.homelab/storage-capable: "false"
+    # ========================================================================
+    stateless_tier:
+      hosts:
+        k3s-worker-2: {}
+        k3s-worker-3: {}
+      vars:
+        workload_tier: stateless
+        workload_tier_taint: false # Affinity-based scheduling (no taints)
+
+    # ========================================================================
+    # Convenience Groups
+    # ========================================================================
+    all_workers:
+      children:
+        stateful_tier:
+        stateless_tier:
+
+    all_tiers:
+      children:
+        infrastructure_tier:
+        stateful_tier:
+        stateless_tier:

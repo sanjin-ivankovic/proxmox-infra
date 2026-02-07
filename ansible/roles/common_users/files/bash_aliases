@@ -1,0 +1,94 @@
+# General system bash aliases
+# Container runtime-specific aliases are loaded from separate files
+
+export PS1="[\[\e[32m\]\u\[\e[m\]@\[\e[33m\]\h\[\e[m\]: \\$\[\e[36m\]\w\[\e[m\]]\\$ "
+
+# NAVIGATION
+alias ..='cd ..' # Move up one directory level
+alias ...='cd ../..' # Move up two directory levels
+alias .3='cd ../../..' # Move up three directory levels
+alias .4='cd ../../../..' # Move up four directory levels
+alias .5='cd ../../../../..' # Move up five directory levels
+alias cd..='cd ..' # Alternative to move up one directory level
+
+# GENERAL SYSTEM ALIASES
+alias update='sudo apt update && sudo apt upgrade -y' # Update and upgrade packages
+alias cls='clear' # Clear the terminal screen
+alias h='history' # Show command history
+alias j='jobs -l' # List active jobs
+alias path='echo -e ${PATH//:/\\n}' # Display PATH variable in a readable format
+alias reload='exec $SHELL -l' # Reload the shell
+
+# FILE AND DIRECTORY MANAGEMENT
+alias mkdir='mkdir -pv' # Create directories, including parent directories
+alias rm='rm -i' # Prompt before every removal
+alias cp='cp -i' # Prompt before overwriting files
+alias mv='mv -i' # Prompt before overwriting files
+alias df='df -h' # Display disk space usage in human-readable format
+alias du='du -h' # Display file and directory sizes in human-readable format
+alias tree='tree -C' # Display directory tree with color
+
+# FILE SIZE AND STORAGE
+alias fdisk='sudo fdisk -l' # List all disk partitions
+alias uuid='sudo vol_id -u' # Get the UUID of a volume
+alias ls='ls -F --color=auto --group-directories-first' # List files with classification indicators (e.g., / for directories) and colorized output
+alias ll='ls -alh --color=auto --group-directories-first' # List all files in long format with human-readable file sizes, colorized output, and directories listed first
+alias lt='ls --human-readable --color=auto --size -1 -S --classify' # File size sorted
+alias lsr='ls --color=auto -t -1' # Recently modified
+alias mnt='mount | grep -E ^/dev | column -t' # Show mounted drives
+alias dirsize='sudo du -hx --max-depth=1' # Show the size of directories at the first level, in human-readable format
+alias dirusage='du -ch | grep total' # Grabs the disk usage in the current directory
+alias diskusage='df -hl --total | grep total' # Gets the total disk usage on your machine
+alias partusage='df -hlT --exclude-type=tmpfs --exclude-type=devtmpfs' # Shows the individual partition usages without the temporary memory values
+alias usage10='du -hsx * | sort -rh | head -10' # Gives you what is using the most space. Both directories and files. Varies on current directory
+
+# NETWORKING
+alias myip='curl ifconfig.me' # Get your public IP address
+alias flushdns='sudo systemd-resolve --flush-caches' # Flush DNS cache
+alias speedtest='curl -s https://raw.githubusercontent.com/sivel/speedtest-cli/master/speedtest.py | python -' # Run a speed test
+alias portsused='sudo netstat -tulpn | grep LISTEN' # Show all listening ports with their associated processes
+alias showports='netstat -lnptu' # Show all network ports in use
+alias showlistening='lsof -i -n | egrep "COMMAND|LISTEN"' # list all listening network connections
+alias ping='ping -c 5' # Send 5 ICMP echo requests to a host
+alias ipe='curl ipinfo.io/ip' # external ip
+alias header='curl -I' # Get web server headers
+
+# Internal IP (primary interface)
+ipi() {
+    hostname -I | awk '{print $1}'
+}
+
+# PROCESS MANAGEMENT
+alias top='htop' # Use htop instead of top for better process management (requires htop to be installed)
+alias killall='killall -v' # Verbose killall
+alias psg='ps aux | grep -v grep | grep -i -e VSZ -e' # Search for a process by name
+
+# SYSTEM MONITORING
+alias meminfo='free -m -l -t' # Get memory usage
+alias psmem='ps auxf | sort -nr -k 4' # Get top process eating memory
+alias psmem10='ps auxf | sort -nr -k 4 | head -10' # Get top 10 processes eating memory
+alias pscpu='ps auxf | sort -nr -k 3' # Get top process eating CPU
+alias pscpu10='ps auxf | sort -nr -k 3 | head -10' # Get top 10 processes eating CPU
+alias cpuinfo='lscpu' # Get server CPU info
+alias gpumeminfo='grep -i --color memory /var/log/Xorg.0.log' # Get GPU RAM on desktop/laptop
+alias free='free -h' # Get memory usage in a human-readable format
+
+# SSH ALIASES
+alias sshconfig='nano ~/.ssh/config' # Edit SSH config file
+alias sshkeygen='ssh-keygen -t rsa -b 4096 -C' # Generate a new SSH key
+alias sshadd='ssh-add ~/.ssh/id_rsa' # Add SSH key to the agent
+
+# BASH ALIASES
+alias baupdate='. ~/.bashrc' # Reload the .bashrc file to apply changes
+alias baedit='nano $HOME/.bash_aliases' # Edit the .bash_aliases file using nano editor
+
+# MISC ALIASES
+alias weather='curl wttr.in' # Get the weather forecast
+alias cal='cal -3' # Show the calendar for the previous, current, and next month
+alias timer='echo "Timer started. Stop with Ctrl-D." && date && time cat && date' # Simple timer
+alias uuidgen='cat /proc/sys/kernel/random/uuid' # Generate a UUID
+
+# Source container runtime aliases if they exist
+# These are deployed by their respective roles (common_docker, common_podman)
+[ -f ~/.docker_aliases ] && source ~/.docker_aliases
+[ -f ~/.podman_aliases ] && source ~/.podman_aliases

@@ -1,0 +1,40 @@
+---
+# ansible/roles/common_ssh/tasks/main.yml
+
+- name: Validate SSH configuration file exists
+  tags: [always]
+  ansible.builtin.stat:
+    path: "{{ common_ssh_sshd_config_path }}"
+  register: common_ssh_config_stat
+  failed_when: not common_ssh_config_stat.stat.exists
+  changed_when: false
+
+- name: Backup SSH configuration
+  tags: [backup, ssh]
+  ansible.builtin.copy:
+    src: "{{ common_ssh_sshd_config_path }}"
+    dest: "{{ common_ssh_sshd_config_path }}.{{ ansible_facts['date_time']['iso8601_basic_short'] }}.bak"
+    remote_src: true
+    mode: '0600'
+    force: false
+  when: common_ssh_backup_config | bool
+  changed_when: false
+
+- name: Apply SSH hardening configuration
+  tags: [ssh, security, harden]
+  ansible.builtin.blockinfile:
+    path: "{{ common_ssh_sshd_config_path }}"
+    marker: "# {mark} ANSIBLE MANAGED BLOCK - SSH Hardening"
+    block: "{{ lookup('template', 'sshd_hardening.conf.j2') }}"
+    backup: "{{ common_ssh_backup_config }}"
+    mode: '0644'
+    owner: root
+    group: root
+    validate: /usr/sbin/sshd -t -f %s
+  notify: Restart ssh
+  register: common_ssh_config_result
+
+- name: Display configuration status
+  tags: [ssh, info]
+  ansible.builtin.debug:
+    msg: "SSH configuration {{ 'updated' if common_ssh_config_result.changed else 'unchanged' }}"

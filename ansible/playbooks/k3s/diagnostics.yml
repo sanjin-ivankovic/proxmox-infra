@@ -1,0 +1,77 @@
+---
+# playbooks/diagnostics.yml
+# Collect cluster diagnostics and troubleshooting information
+
+- name: Collect cluster diagnostics
+  hosts: masters[0]
+  become: true
+  remote_user: maintainer # Use non-root user (root login disabled after bootstrap)
+  tasks:
+    - name: Get all resources
+      ansible.builtin.command: kubectl get all --all-namespaces
+      environment:
+        KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+      register: all_resources
+      changed_when: false
+
+    - name: Get node usage (top nodes)
+      ansible.builtin.command: kubectl top nodes
+      environment:
+        KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+      register: top_nodes
+      changed_when: false
+      failed_when: false
+
+    - name: Get pod usage (top pods)
+      ansible.builtin.command: kubectl top pods -A --sort-by=cpu | head -n 20
+      environment:
+        KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+      register: top_pods
+      changed_when: false
+      failed_when: false
+
+    - name: Display node usage
+      ansible.builtin.debug:
+        var: top_nodes.stdout_lines
+
+    - name: Display top CPU pods
+      ansible.builtin.debug:
+        var: top_pods.stdout_lines
+
+    - name: Get events
+      ansible.builtin.command: kubectl get events --all-namespaces --sort-by='.lastTimestamp'
+      environment:
+        KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+      register: events
+      changed_when: false
+
+    - name: Display recent events
+      ansible.builtin.debug:
+        var: events.stdout_lines
+      changed_when: false
+
+    - name: Save diagnostics to file
+      ansible.builtin.copy:
+        content: |
+          === CLUSTER DIAGNOSTICS REPORT ===
+          Date: {{ ansible_date_time.iso8601 }}
+
+          === NODE STATUS ===
+          {{ all_resources.stdout }}
+
+          === NODE USAGE ===
+          {{ top_nodes.stdout | default('Metrics API not available') }}
+
+          === TOP PODS ===
+          {{ top_pods.stdout | default('Metrics API not available') }}
+
+          === RECENT EVENTS ===
+          {{ events.stdout }}
+        dest: "/tmp/k3s-diagnostics-{{ ansible_date_time.date }}.txt"
+        mode: "0644"
+      delegate_to: localhost
+      become: false
+
+    - name: Diagnostics saved
+      ansible.builtin.debug:
+        msg: "Diagnostics report saved to /tmp/k3s-diagnostics-{{ ansible_date_time.date }}.txt"

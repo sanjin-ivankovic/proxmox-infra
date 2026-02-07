@@ -1,0 +1,57 @@
+---
+# playbooks/lxc/verify.yml
+# Verify system health and configuration
+
+- name: Verify LXC Host Health
+  hosts: all
+  become: true
+  gather_facts: true
+  remote_user: maintainer
+  vars:
+    ansible_user: maintainer
+
+  tasks:
+    - name: Check system uptime
+      ansible.builtin.command: uptime -p
+      register: uptime_check
+      changed_when: false
+      tags: [verify, system]
+
+    - name: Check disk usage
+      ansible.builtin.command: df -h /
+      register: disk_check
+      changed_when: false
+      tags: [verify, system]
+
+    - name: Check if Docker is installed
+      ansible.builtin.command: which docker
+      register: docker_installed
+      ignore_errors: true
+      changed_when: false
+      tags: [verify, docker]
+
+    - name: Check Docker status (if installed)
+      ansible.builtin.systemd:
+        name: docker
+      register: docker_status
+      when: docker_installed.rc == 0
+      tags: [verify, docker]
+
+    - name: Check failed systemd units
+      ansible.builtin.command: systemctl list-units --state=failed --no-legend
+      register: failed_units
+      changed_when: false
+      tags: [verify, system]
+
+    - name: Display health report
+      ansible.builtin.debug:
+        msg:
+          - '🔍 Health Report for {{ inventory_hostname }}'
+          - '  • Uptime: {{ uptime_check.stdout }}'
+          - '  • Disk Usage: {{ disk_check.stdout_lines[-1] | trim }}'
+          - >-
+            "  • Docker: {{ 'Running' if (docker_installed.rc == 0 and docker_status.status.ActiveState == 'active')
+            else ('Not Installed' if docker_installed.rc != 0 else 'Stopped') }}"
+          - '  • Failed Units: {{ failed_units.stdout_lines | length }}'
+          - "{{ '  ⚠ Failed units found: ' + failed_units.stdout if failed_units.stdout_lines | length > 0 else '  ✓ No failed units' }}"
+      tags: [verify]
