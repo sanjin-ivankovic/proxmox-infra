@@ -1,0 +1,33 @@
+╔══════════════════════════════════════════════════════════════════╗
+║              Windows VMs Deployment Summary                     ║
+╚══════════════════════════════════════════════════════════════════╝
+
+📊 Compute Resources Deployed:
+────────────────────────────────
+  • Windows VMs:       ${windows_vm_count}
+  • Total:             ${windows_vm_count}
+
+🔑 SSH Keys Generated:
+────────────────────────────────
+  Location: ${ssh_key_directory}
+  Files:    ${ssh_key_count} key pairs
+
+📋 Ansible Inventory:
+────────────────────────────────
+  YAML:     ${inventory_yaml_path}
+  INI:      ${inventory_ini_path}
+  Hosts:    ${host_count} total
+
+🚀 Next Steps:
+────────────────────────────────
+  1. Review deployment:  terraform output vm_details
+  2. Test SSH access:    terraform output quick_ssh
+  3. Configure hosts:    cd ../../ansible && make accept-host-keys
+  4. Bootstrap VMs:      cd ../../ansible && make bootstrap-host HOST=<hostname>
+  5. Deploy services:    git push origin main
+
+💡 Useful Commands:
+────────────────────────────────
+  • View SSH commands:   terraform output ssh_commands
+  • View IP addresses:   terraform output vm_ips
+  • Generate inventory:  cd ../../ansible && make inventory

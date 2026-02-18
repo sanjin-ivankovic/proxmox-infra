@@ -1,0 +1,102 @@
+---
+# ============================================================================
+# Upgrade Talos OS Version
+# ============================================================================
+# Performs a rolling upgrade of Talos OS across all nodes.
+#
+# Usage:
+#   make upgrade  # Will prompt for version
+#   OR
+#   ansible-playbook -i inventory/hosts.yml 06-upgrade.yml -e "talos_version=v1.13.0"
+# ============================================================================
+
+- name: Upgrade Talos cluster
+  hosts: talos
+  gather_facts: false
+  become: false  # Talos uses API - no privilege escalation needed
+  connection: local
+  serial: 1 # Upgrade one node at a time
+
+  tasks:
+    - name: Fail if talos_version not specified
+      ansible.builtin.fail:
+        msg: "talos_version variable required (e.g., -e 'talos_version=v1.13.0')"
+      when: talos_version is not defined
+      run_once: true
+
+    - name: Cordon node before upgrade
+      ansible.builtin.command:
+        cmd: >
+          kubectl --kubeconfig {{ talos_kubeconfig_file }} cordon {{ inventory_hostname }}
+      environment:
+        KUBECONFIG: '{{ talos_kubeconfig_file }}'
+      register: cordon_result
+      changed_when: cordon_result.rc == 0
+      failed_when: false
+      delegate_to: localhost
+
+    - name: Drain node workloads
+      ansible.builtin.command:
+        cmd: >
+          kubectl --kubeconfig {{ talos_kubeconfig_file }} drain {{ inventory_hostname }}
+          --ignore-daemonsets
+          --delete-emptydir-data
+          --timeout=300s
+          --force
+      environment:
+        KUBECONFIG: '{{ talos_kubeconfig_file }}'
+      register: drain_result
+      changed_when: drain_result.rc == 0
+      failed_when: false
+      delegate_to: localhost
+
+    - name: Upgrade Talos OS - {{ inventory_hostname }}
+      ansible.builtin.command:
+        cmd: >
+          talosctl upgrade
+          --talosconfig {{ talos_config_file }}
+          --nodes {{ ansible_host }}
+          --endpoints {{ ansible_host }}
+          --image {{ talos_installer_image }}
+          --preserve
+      environment:
+        TALOSCONFIG: '{{ talos_config_file }}'
+      register: upgrade_result
+      changed_when: upgrade_result.rc == 0
+      delegate_to: localhost
+
+    - name: Wait for node to reboot
+      ansible.builtin.wait_for:
+        host: '{{ ansible_host }}'
+        port: 50000
+        delay: 30
+        timeout: 600
+      delegate_to: localhost
+
+    - name: Verify node health after upgrade
+      ansible.builtin.command:
+        cmd: >
+          talosctl health
+          --talosconfig {{ talos_config_file }}
+          --nodes {{ ansible_host }}
+          --wait-timeout 5m
+      environment:
+        TALOSCONFIG: '{{ talos_config_file }}'
+      register: health
+      changed_when: false
+      delegate_to: localhost
+
+    - name: Uncordon node after successful upgrade
+      ansible.builtin.command:
+        cmd: >
+          kubectl --kubeconfig {{ talos_kubeconfig_file }} uncordon {{ inventory_hostname }}
+      environment:
+        KUBECONFIG: '{{ talos_kubeconfig_file }}'
+      register: uncordon_result
+      changed_when: uncordon_result.rc == 0
+      delegate_to: localhost
+      when: health.rc == 0
+
+    - name: Display upgrade status
+      ansible.builtin.debug:
+        msg: '✓ {{ inventory_hostname }} upgraded to {{ talos_version }} and healthy'

@@ -1,0 +1,52 @@
+
+================================================================================
+Talos VMs - Deployment Summary
+================================================================================
+
+✅ VMs Successfully Created!
+
+Resources Created:
+  • Total VMs:        ${talos_vm_count}
+  • Control Plane:    ${controlplane_count} nodes
+  • Workers:          ${worker_count} nodes
+  • Total CPU Cores:  ${total_cores}
+  • Total Memory:     ${total_memory_gb} GB
+
+What Terraform Did:
+  ✅ Created VMs on Proxmox (currently stopped)
+  ✅ Configured VM hardware (UEFI, disk, network)
+  ✅ Generated Ansible inventory
+
+Next Steps - Configure Talos with Ansible:
+
+  1. Navigate to Ansible Talos directory:
+     cd ../../ansible/talos
+
+  2. Generate Talos machine configurations:
+     make generate-configs
+
+     This creates configs in ansible/talos/configs/:
+       • secrets.yaml (cluster PKI)
+       • controlplane.yaml (CP machine config)
+       • worker.yaml (worker machine config)
+       • talosconfig (Talos API credentials)
+
+  3. Apply configurations to nodes (VMs will be started):
+     make apply-configs
+
+  4. Bootstrap Kubernetes cluster:
+     make bootstrap
+
+  5. Verify cluster health:
+     make verify
+
+  6. Access the cluster:
+     export KUBECONFIG=$(pwd)/configs/kubeconfig
+     kubectl get nodes
+
+Documentation:
+  • Talos Docs: https://www.talos.dev/
+  • Terraform: terraform/talos-vms/README.md
+  • Ansible Talos: ansible/talos/README.md
+
+================================================================================

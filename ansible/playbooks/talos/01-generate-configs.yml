@@ -1,0 +1,241 @@
+---
+# ============================================================================
+# Generate Talos Machine Configurations
+# ============================================================================
+# This playbook generates Talos machine configs for control plane and worker
+# nodes using talosctl gen config.
+#
+# Network Configuration:
+#   - IPs are assigned via DHCP reservations (configured on domain controller)
+#   - MAC addresses are locked in Terraform (see terraform/talos-vms)
+#   - See docs/talos-dhcp-reservations.md for MAC-to-IP mappings
+#
+# Prerequisites:
+#   - talosctl installed: brew install siderolabs/tap/talosctl
+#   - Inventory with control plane and worker nodes defined
+#   - DHCP reservations configured for all node MACs
+#
+# Usage:
+#   cd /home/user/projects/proxmox-infra/ansible/talos
+#   make generate-configs
+#   OR
+#   ansible-playbook -i inventory/hosts.yml ../playbooks/talos/01-generate-configs.yml
+# ============================================================================
+
+- name: Generate Talos machine configurations
+  hosts: localhost
+  gather_facts: true
+  become: false  # Talos uses API - no privilege escalation needed
+
+  tasks:
+    - name: Check if talosctl is installed
+      ansible.builtin.command: which talosctl
+      register: talosctl_check
+      changed_when: false
+      failed_when: false
+
+    - name: Fail if talosctl not found
+      ansible.builtin.fail:
+        msg: |
+          talosctl not found. Please install it:
+            brew install siderolabs/tap/talosctl
+          Or:
+            curl -sL https://talos.dev/install | sh
+      when: talosctl_check.rc != 0
+
+    - name: Display talosctl version
+      ansible.builtin.command: talosctl version --client --short
+      register: talosctl_version
+      changed_when: false
+
+    - name: Show talosctl version
+      ansible.builtin.debug:
+        msg: 'Using {{ talosctl_version.stdout }}'
+
+    - name: Ensure configs directory exists
+      ansible.builtin.file:
+        path: '{{ talos_config_dir }}'
+        state: directory
+        mode: '0755'
+
+    - name: Ensure patches directory exists
+      ansible.builtin.file:
+        path: '{{ playbook_dir }}/../../talos/patches'
+        state: directory
+        mode: '0755'
+
+    - name: Render common patch template with version variable
+      ansible.builtin.template:
+        src: '{{ playbook_dir }}/../../talos/patches/common.yaml.j2'
+        dest: '{{ playbook_dir }}/../../talos/patches/common.yaml'
+        mode: '0644'
+
+    - name: Check if secrets file already exists
+      ansible.builtin.stat:
+        path: '{{ talos_config_dir }}/secrets.yaml'
+      register: secrets_exists
+
+    - name: Generate cluster secrets (one-time)
+      ansible.builtin.command:
+        cmd: >
+          talosctl gen secrets
+          --output-file {{ talos_config_dir }}/secrets.yaml
+          --talos-version {{ talos_version }}
+      args:
+        creates: '{{ talos_config_dir }}/secrets.yaml'
+      register: gen_secrets_result
+      when: not secrets_exists.stat.exists
+      notify: display secrets generation result
+
+    - name: Set secrets file permissions
+      ansible.builtin.file:
+        path: '{{ talos_config_dir }}/secrets.yaml'
+        mode: '0600'
+      when: secrets_exists.stat.exists or gen_secrets_result is changed
+
+    - name: Check if base configs already exist
+      ansible.builtin.stat:
+        path: '{{ talos_config_dir }}/controlplane.yaml'
+      register: base_config_exists
+
+    - name: Generate base Talos configs with patches
+      ansible.builtin.command:
+        cmd: >
+          talosctl gen config {{ cluster_name }}
+          {{ talos_control_plane_endpoint }}
+          --output-dir {{ talos_config_dir }}
+          --kubernetes-version {{ kubernetes_version }}
+          --with-docs=false
+          --with-examples=false
+          --with-secrets {{ talos_config_dir }}/secrets.yaml
+          --config-patch @{{ playbook_dir }}/../../talos/patches/common.yaml
+          --config-patch-control-plane @{{ playbook_dir }}/../../talos/patches/controlplane.yaml
+          --config-patch-worker @{{ playbook_dir }}/../../talos/patches/worker.yaml
+      args:
+        creates: '{{ talos_config_dir }}/controlplane.yaml'
+      register: gen_config_result
+      when: not base_config_exists.stat.exists
+      notify:
+        - display generation result
+        - create kubeconfig placeholder
+
+    - name: Display existing config notice
+      ansible.builtin.debug:
+        msg: 'INFO: Base configs already exist in {{ talos_config_dir }}/'
+      when: base_config_exists.stat.exists
+
+    - name: Generate per-node configs with network configuration
+      ansible.builtin.shell:
+        cmd: |
+          talosctl machineconfig patch \
+            {{ talos_config_dir }}/{{ 'controlplane.yaml' if hostvars[item].talos_role == 'controlplane' else 'worker.yaml' }} \
+            --patch @{{ playbook_dir }}/../../talos/patches/nodes/{{ item }}.yaml \
+            --output {{ talos_config_dir }}/{{ item }}.yaml
+        creates: '{{ talos_config_dir }}/{{ item }}.yaml'
+      loop: "{{ groups['talos'] }}"
+      when: not base_config_exists.stat.exists or gen_config_result is changed
+
+    - name: Set permissions on per-node configs
+      ansible.builtin.file:
+        path: '{{ talos_config_dir }}/{{ item }}.yaml'
+        mode: '0600'
+      loop: "{{ groups['talos'] }}"
+
+    - name: Set permissions on base configs
+      ansible.builtin.file:
+        path: '{{ talos_config_dir }}/{{ item }}'
+        mode: '0600'
+      loop:
+        - controlplane.yaml
+        - worker.yaml
+
+    - name: List generated files
+      ansible.builtin.find:
+        paths: '{{ talos_config_dir }}'
+        patterns: '*.yaml,talosconfig'
+        file_type: file
+      register: generated_files
+
+    - name: Display generated files
+      ansible.builtin.debug:
+        msg: |
+          Generated Talos configuration files:
+          {% for file in generated_files.files %}
+          - {{ file.path | basename }}
+          {% endfor %}
+
+          Next steps:
+          1. Review configs in: {{ talos_config_dir }}/
+          2. Apply to nodes: make apply-configs
+          3. Bootstrap cluster: make bootstrap
+
+          Important files:
+          - talosconfig: API credentials for talosctl
+          - controlplane.yaml: Control plane node config
+          - worker.yaml: Worker node config
+          - kubeconfig: Will be generated after bootstrap
+
+    - name: Summary
+      ansible.builtin.debug:
+        msg: |
+          ============================================================================
+          ✓ Talos configuration generation complete!
+          ============================================================================
+
+          Cluster: {{ cluster_name }}
+          Endpoint: {{ talos_control_plane_endpoint }} (Layer 2 VIP)
+          VIP Address: {{ talos_vip_address }}
+          Kubernetes: v{{ kubernetes_version }}
+          Talos: {{ talos_version }}
+
+          Config directory: {{ talos_config_dir }}/
+
+          Files generated:
+          - secrets.yaml (cluster identity - keep secure!)
+          - talosconfig (API credentials)
+          - controlplane.yaml (control plane config with VIP + patches)
+          - worker.yaml (worker node config with patches)
+
+          Machine config patches applied:
+          - common.yaml (all nodes - storage, sysctls, time)
+          - controlplane.yaml (CP only - VIP, etcd, API server)
+          - worker.yaml (workers only - kubelet tuning)
+
+          Network Configuration:
+          - Control Plane VIP: {{ talos_vip_address }} (HA endpoint)
+          - IPs assigned via DHCP reservations
+          - MAC addresses locked in Terraform
+          - See: docs/talos-dhcp-reservations.md for mappings
+
+          Next steps:
+          1. Ensure DHCP reservations are configured (including VIP)
+          2. Apply configs: make apply-configs
+          3. Bootstrap cluster: make bootstrap
+
+          To set talosctl context:
+            export TALOSCONFIG={{ talos_config_dir }}/talosconfig
+
+          Note: secrets.yaml contains cluster PKI and should be backed up securely.
+                To regenerate configs without losing cluster identity, keep secrets.yaml
+                and re-run this playbook.
+          ============================================================================
+
+  handlers:
+    - name: Display secrets generation result
+      ansible.builtin.debug:
+        msg: '✓ Cluster secrets generated: {{ talos_config_dir }}/secrets.yaml'
+      listen: display secrets generation result
+
+    - name: Display generation result
+      ansible.builtin.debug:
+        msg: '✓ Base configs generated in {{ talos_config_dir }}/'
+      listen: display generation result
+
+    - name: Create kubeconfig placeholder
+      ansible.builtin.copy:
+        content: |
+          # Kubeconfig will be generated after bootstrapping the cluster
+          # Run: make bootstrap
+        dest: '{{ talos_config_dir }}/kubeconfig.placeholder'
+        mode: '0644'
+      listen: create kubeconfig placeholder

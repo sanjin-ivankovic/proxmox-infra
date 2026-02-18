@@ -1,0 +1,588 @@
+# Docker Configuration Guide
+
+Complete guide to Docker CE installation and configuration via the
+`common_docker` Ansible role.
+
+## Table of Contents
+
+- [Overview](#overview)
+- [What Gets Installed](#what-gets-installed)
+- [Daemon Configuration](#daemon-configuration)
+- [Directory Structure](#directory-structure)
+- [User Configuration](#user-configuration)
+- [Bash Aliases](#bash-aliases)
+- [Available Tags](#available-tags)
+- [Usage Examples](#usage-examples)
+- [Troubleshooting](#troubleshooting)
+
+---
+
+## Overview
+
+The `common_docker` Ansible role provides a complete Docker CE installation
+with best-practice daemon configuration, directory structure setup, and
+convenience features for managing containerized services.
+
+### Role Features
+
+- ✅ **Official Docker CE** - Installs from Docker's official APT repository
+- ✅ **Docker Compose V2** - Native Docker Compose plugin (not standalone)
+- ✅ **Buildx Support** - Multi-platform image builds
+- ✅ **Optimized Daemon** - Production-ready configuration
+- ✅ **Directory Structure** - Standardized `/srv/docker/` layout
+- ✅ **User Management** - Adds user to `docker` group
+- ✅ **Bash Aliases** - Convenient shortcuts for Docker commands
+- ✅ **PUID/PGID Facts** - User UID/GID for containers
+
+### Target Platforms
+
+- ✅ Debian 12 (Bookworm)
+- ✅ Debian 13 (Trixie)
+- ✅ Ubuntu 22.04 (Jammy Jellyfish)
+- ✅ Ubuntu 24.04 (Noble Numbat)
+
+**Used By**: LXC containers (not Linux VMs, which use Podman)
+
+---
+
+## What Gets Installed
+
+### Docker Packages
+
+| Package                 | Purpose                                           |
+| ----------------------- | ------------------------------------------------- |
+| `docker-ce`             | Docker Engine (daemon)                            |
+| `docker-ce-cli`         | Docker command-line client                        |
+| `docker-buildx-plugin`  | Advanced build features (multi-platform, caching) |
+| `docker-compose-plugin` | Docker Compose V2 (native plugin)                 |
+| `containerd.io`         | Container runtime                                 |
+
+### Dependencies
+
+| Package           | Purpose                      |
+| ----------------- | ---------------------------- |
+| `ca-certificates` | SSL certificate verification |
+| `curl`            | Download Docker GPG key      |
+| `gnupg`           | GPG key verification         |
+
+### Version Management
+
+The role installs the **latest stable** versions from Docker's official
+repository. Use Renovate for automated updates.
+
+---
+
+## Daemon Configuration
+
+The role creates `/etc/docker/daemon.json` with production-ready settings:
+
+### Complete daemon.json
+
+```json
+{
+  "log-driver": "json-file",
+  "log-opts": {
+    "max-size": "10m",
+    "max-file": "3"
+  },
+  "storage-driver": "overlay2",
+  "live-restore": true,
+  "features": {
+    "buildkit": true
+  },
+  "builder": {
+    "gc": {
+      "enabled": true,
+      "defaultKeepStorage": "10GB"
+    }
+  }
+}
+```
+
+### Configuration Explained
+
+#### Log Management
+
+```json
+"log-driver": "json-file",
+"log-opts": {
+  "max-size": "10m",
+  "max-file": "3"
+}
+```
+
+- **Driver**: `json-file` - Docker's default structured logging
+- **Max Size**: 10MB per log file (prevents disk bloat)
+- **Max Files**: 3 files per container (30MB total per container)
+- **Rotation**: Automatic when size limit reached
+
+**Why?** Prevents containers with excessive logging from filling disk.
+
+#### Storage Driver
+
+```json
+"storage-driver": "overlay2"
+```
+
+- **Driver**: `overlay2` - Modern, performant storage driver
+- **Performance**: Better than old `aufs` or `devicemapper`
+- **Compatibility**: Recommended by Docker for modern kernels
+
+#### Live Restore
+
+```json
+"live-restore": true
+```
+
+- **Purpose**: Containers keep running if Docker daemon stops
+- **Use Case**: Docker daemon updates without container downtime
+- **Limitation**: Only works for running containers (not starting)
+
+**Why?** Reduces service interruption during Docker maintenance.
+
+#### BuildKit
+
+```json
+"features": {
+  "buildkit": true
+}
+```
+
+- **BuildKit**: Next-gen image building backend
+- **Benefits**: Faster builds, better caching, parallel builds
+- **Syntax**: Enables Dockerfile syntax extensions
+
+#### Garbage Collection
+
+```json
+"builder": {
+  "gc": {
+    "enabled": true,
+    "defaultKeepStorage": "10GB"
+  }
+}
+```
+
+- **Purpose**: Automatic cleanup of unused build cache
+- **Threshold**: Keeps 10GB of build cache
+- **Trigger**: Cleans up when cache exceeds limit
+
+**Why?** Prevents build cache from consuming all disk space.
+
+---
+
+## Directory Structure
+
+The role creates a standardized directory layout for Docker services:
+
+### Base Structure
+
+```text
+/srv/docker/                    # Base directory for all services
+├── <service-name-1>/           # Individual service directory
+│   ├── docker-compose.yml      # Service definition
+│   ├── .env                    # Environment variables (generated by CI/CD)
+│   ├── .checksum               # Deployment checksum (idempotency)
+│   ├── appdata/                # Persistent application data
+│   │   ├── config/             # Configuration files
+│   │   ├── data/               # Application data
+│   │   └── logs/               # Service logs
+│   └── secrets/                # Sensitive files (chmod 0700)
+│       ├── api-keys.txt
+│       └── certificates/
+├── <service-name-2>/
+└── ...
+```
+
+### Ownership & Permissions
+
+```bash
+# Base directory
+/srv/docker/
+  Owner: maintainer:docker
+  Permissions: 0755 (drwxr-xr-x)
+
+# Service directories
+/srv/docker/<service>/
+  Owner: maintainer:docker
+  Permissions: 0755 (drwxr-xr-x)
+
+# Secrets directories
+/srv/docker/<service>/secrets/
+  Owner: maintainer:docker
+  Permissions: 0700 (drwx------)
+```
+
+### Example: Pi-hole Service
+
+```text
+/srv/docker/pihole-1/
+├── docker-compose.yml
+├── .env
+├── .checksum
+├── appdata/
+│   ├── config/
+│   │   ├── pihole-FTL.conf
+│   │   ├── custom.list
+│   │   └── adlists.list
+│   └── data/
+│       ├── gravity.db
+│       └── pihole.log
+└── secrets/                    # Not used by pihole
+```
+
+---
+
+## User Configuration
+
+### Docker Group Membership
+
+The role adds the configured user (`maintainer`) to the `docker` group:
+
+```bash
+# User is added to docker group
+usermod -aG docker maintainer
+```
+
+**Benefits**:
+
+- ✅ Run `docker` commands without `sudo`
+- ✅ Enables Docker Compose execution
+- ✅ Required for GitLab CI/CD deployments
+
+**Activation**: User must log out and back in (or use `newgrp docker`) for
+group membership to take effect.
+
+### PUID/PGID Ansible Facts
+
+The role sets Ansible facts for user UID/GID:
+
+```text
+puid: "{{ ansible_user_uid }}" # e.g., 1000
+pgid: "{{ ansible_user_gid }}" # e.g., 1000
+```
+
+**Usage in docker-compose.yml**:
+
+```text
+services:
+  app:
+    image: linuxserver/plex
+    environment:
+      - PUID=1000 # Use maintainer's UID
+      - PGID=1000 # Use maintainer's GID
+```
+
+**Why?** Ensures containers write files with correct ownership (not root).
+
+---
+
+## Bash Aliases
+
+The role creates `~/.bash_aliases` with convenient Docker shortcuts:
+
+### Available Aliases
+
+```bash
+# Docker Compose (uses native plugin)
+alias dc='docker compose'
+alias dcu='docker compose up -d'
+alias dcd='docker compose down'
+alias dcr='docker compose restart'
+alias dcp='docker compose pull'
+alias dcl='docker compose logs -f'
+
+# Docker Container Management
+alias dps='docker ps'
+alias dpsa='docker ps -a'
+alias di='docker images'
+alias drm='docker rm'
+alias drmi='docker rmi'
+
+# Docker System
+alias dsys='docker system df'          # Disk usage
+alias dprune='docker system prune -af'  # Clean all unused resources
+```
+
+### Usage Examples
+
+```bash
+# View running containers
+dps
+
+# Start service
+cd /srv/docker/pihole-1
+dcu  # docker compose up -d
+
+# View logs
+dcl  # docker compose logs -f
+
+# Stop service
+dcd  # docker compose down
+
+# Check disk usage
+dsys
+```
+
+---
+
+## Available Tags
+
+The role supports granular execution via Ansible tags:
+
+### Tag Reference
+
+| Tag           | Scope           | Purpose                           |
+| ------------- | --------------- | --------------------------------- |
+| `docker`      | Full role       | Run entire Docker installation    |
+| `install`     | APT operations  | Install Docker packages only      |
+| `packages`    | APT operations  | Same as `install`                 |
+| `config`      | Daemon config   | Update daemon.json only           |
+| `users`       | User management | Add user to docker group          |
+| `directories` | Filesystem      | Create /srv/docker/ structure     |
+| `setup`       | All config      | daemon.json + directories + users |
+| `aliases`     | Bash aliases    | Create ~/.bash_aliases            |
+| `verify`      | Health checks   | Verify Docker installation        |
+| `check`       | Health checks   | Same as `verify`                  |
+
+### Tag Usage Examples
+
+**Install Docker only** (skip configuration):
+
+```bash
+ansible-playbook playbooks/lxc/configure.yml --tags install
+```
+
+**Update daemon configuration only**:
+
+```bash
+ansible-playbook playbooks/lxc/configure.yml --tags config
+```
+
+**Recreate directory structure**:
+
+```bash
+ansible-playbook playbooks/lxc/configure.yml --tags directories
+```
+
+**Verify Docker installation**:
+
+```bash
+ansible-playbook playbooks/lxc/configure.yml --tags verify
+```
+
+**Multiple tags**:
+
+```bash
+ansible-playbook playbooks/lxc/configure.yml --tags "install,config,verify"
+```
+
+---
+
+## Usage Examples
+
+### Running the Role
+
+#### Via Makefile (Recommended)
+
+```bash
+cd ansible
+make configure-host HOST=pihole-1
+```
+
+#### Via Ansible Playbook
+
+```bash
+cd ansible
+ansible-playbook playbooks/lxc/configure.yml -i inventory/lxc-hosts.yml \
+  --limit pihole-1
+```
+
+#### With Specific Tags
+
+```bash
+cd ansible
+ansible-playbook playbooks/lxc/configure.yml -i inventory/lxc-hosts.yml \
+  --limit pihole-1 --tags docker,verify
+```
+
+### Verifying Installation
+
+#### Check Docker Version
+
+```bash
+ssh maintainer@pihole-1
+docker --version
+# Output: Docker version 24.0.7, build afdd53b
+
+docker compose version
+# Output: Docker Compose version v2.23.3
+```
+
+#### Check Daemon Status
+
+```bash
+ssh maintainer@pihole-1
+sudo systemctl status docker
+# Output: ● docker.service - Docker Application Container Engine
+#         Loaded: loaded (/lib/systemd/system/docker.service; enabled)
+#         Active: active (running) since...
+```
+
+#### Check User Group Membership
+
+```bash
+ssh maintainer@pihole-1
+groups
+# Output: maintainer sudo docker
+```
+
+#### Test Docker Permissions
+
+```bash
+ssh maintainer@pihole-1
+docker ps  # Should work without sudo
+```
+
+---
+
+## Troubleshooting
+
+### "Permission denied" when running docker commands
+
+**Symptoms**:
+
+```bash
+$ docker ps
+Got permission denied while trying to connect to the Docker daemon socket
+```
+
+**Cause**: User not in `docker` group or needs to re-login
+
+**Solution**:
+
+```bash
+# Option 1: Re-login (SSH disconnect and reconnect)
+exit
+ssh maintainer@pihole-1
+
+# Option 2: Activate group without re-login
+newgrp docker
+
+# Verify group membership
+groups
+# Should show: maintainer sudo docker
+```
+
+### Docker daemon not starting
+
+**Symptoms**:
+
+```bash
+$ sudo systemctl status docker
+● docker.service - Docker Application Container Engine
+   Active: failed (Result: exit-code)
+```
+
+**Cause**: Invalid `/etc/docker/daemon.json` syntax
+
+**Solution**:
+
+```bash
+# Validate JSON syntax
+cat /etc/docker/daemon.json | jq .
+# Should output formatted JSON without errors
+
+# If JSON invalid, check for:
+# - Missing commas
+# - Trailing commas
+# - Mismatched brackets/braces
+
+# Fix and restart
+sudo systemctl restart docker
+```
+
+### "Cannot connect to Docker daemon"
+
+**Symptoms**:
+
+```bash
+$ docker ps
+Cannot connect to the Docker daemon at unix:///var/run/docker.sock.
+Is the docker daemon running?
+```
+
+**Cause**: Docker daemon not running
+
+**Solution**:
+
+```bash
+# Start Docker
+sudo systemctl start docker
+
+# Enable on boot
+sudo systemctl enable docker
+
+# Verify
+sudo systemctl status docker
+```
+
+### Disk space issues from Docker
+
+**Symptoms**:
+
+- Disk full errors
+- Failed deployments
+- Out of space warnings
+
+**Solution**:
+
+```bash
+# Check Docker disk usage
+docker system df
+# Shows: Images, Containers, Volumes, Build Cache
+
+# Prune unused resources
+docker system prune -a
+# Removes:
+# - Stopped containers
+# - Unused networks
+# - Dangling images
+# - Build cache
+
+# More aggressive cleanup
+docker system prune -a --volumes
+# Also removes unused volumes (⚠️ may delete data)
+```
+
+### BuildKit disabled despite daemon.json
+
+**Symptoms**:
+
+```bash
+$ docker build .
+# Uses legacy builder instead of BuildKit
+```
+
+**Cause**: Daemon restart needed after config change
+
+**Solution**:
+
+```bash
+sudo systemctl restart docker
+```
+
+---
+
+## Related Documentation
+
+- [Docker Documentation](https://docs.docker.com/)
+- [Docker Compose Documentation](https://docs.docker.com/compose/)
+- [Ansible README](../README.md) - Main Ansible documentation
+- [Main README](../../README.md) - Full project documentation
+- [Services README](../../services/README.md) - Service deployment guide
+
+---
+
+**💡 Tip**: Use `dsys` (alias for `docker system df`) regularly to monitor
+Docker disk usage!

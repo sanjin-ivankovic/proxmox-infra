@@ -1,0 +1,45 @@
+---
+# Bootstrap Playbook - Run ONCE as root to create non-root user
+#
+# This playbook:
+# 1. Connects as root using Terraform-generated SSH keys
+# 2. Creates the non-root user (maintainer) with sudo access
+# 3. Copies SSH authorized_keys from root to new user
+# 4. Hardens SSH (disables root login, password auth)
+#
+# Usage:
+#   make bootstrap-host HOST=<hostname>
+#   OR
+#   ansible-playbook linux-vms/playbooks/bootstrap.yml -i linux-vms/inventory/hosts.yml --limit <hostname>
+#
+# After this runs successfully:
+# - Root login will be DISABLED
+# - Use configure.yml (as maintainer user) for all subsequent updates
+
+- name: Bootstrap - Initial User Setup (Linux VMs)
+  hosts: all
+  become: true
+  gather_facts: true
+  remote_user: root  # Explicitly connect as root
+  tags: [bootstrap]
+
+  roles:
+    - role: common_system
+      tags: [system, packages]
+    - role: common_users
+      tags: [users, security]
+    - role: common_ssh
+      tags: [ssh, security]
+
+  post_tasks:
+    - name: Bootstrap completion message
+      ansible.builtin.debug:
+        msg:
+          - "✓ Bootstrap complete!"
+          - "  → User 'maintainer' created with sudo access"
+          - "  → SSH key copied from root"
+          - "  → Root login DISABLED"
+          - ""
+          - "Next steps:"
+          - "  1. Test SSH: ssh -i <key> maintainer@{{ ansible_host }}"
+          - "  2. Run: make configure-host HOST=<hostname> (for regular updates)"

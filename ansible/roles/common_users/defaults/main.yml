@@ -1,0 +1,32 @@
+---
+# ansible/roles/common_users/defaults/main.yml
+
+# User configuration
+common_users_user: "{{ user | default('maintainer') }}"
+common_users_user_shell: "/bin/bash"
+common_users_user_password_hash: null
+common_users_user_comment: "System Administrator"
+
+# Additional groups
+common_users_groups:
+  - sudo
+  - adm
+  - systemd-journal
+
+# Sudo configuration
+common_users_sudo_nopassword: true
+common_users_sudo_commands: "ALL"
+
+# SSH configuration
+common_users_root_ssh_keys_path: "/root/.ssh/authorized_keys"
+common_users_ssh_key_type: "ed25519"
+common_users_ssh_key_bits: 4096
+
+# Bash configuration
+common_users_deploy_bash_aliases: true
+common_users_bashrc_additions: []
+
+# Security
+common_users_lock_root_account: true
+common_users_test_sudo_access: false
+common_users_expire_root_password: true

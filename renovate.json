@@ -1,0 +1,273 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "description": "Renovate bot configuration for Proxmox homelab infrastructure - IaC automation with Terraform, Docker Compose services, and custom Docker images",
+  "extends": ["config:best-practices", "mergeConfidence:all-badges"],
+  "timezone": "Europe/Berlin",
+  "schedule": ["at any time"],
+  "labels": ["renovate", "dependencies"],
+  "assignees": ["@maintainer"],
+  "reviewers": ["@maintainer"],
+  "prCreation": "immediate",
+  "rebaseWhen": "behind-base-branch",
+  "prConcurrentLimit": 10,
+  "prHourlyLimit": 0,
+  "branchConcurrentLimit": 10,
+  "semanticCommits": "enabled",
+  "semanticCommitType": "chore",
+  "semanticCommitScope": "deps",
+  "commitMessageAction": "Update",
+  "commitMessageTopic": "{{depName}}",
+  "automerge": false,
+  "platformAutomerge": false,
+  "separateMajorMinor": true,
+  "separateMinorPatch": true,
+  "separateMultipleMajor": true,
+  "dependencyDashboardTitle": "🔄 Renovate: Proxmox Infrastructure",
+  "dependencyDashboardHeader": "## 📊 Dependency Status Overview\n\nThis dashboard tracks all dependency updates for Proxmox homelab infrastructure automation.\n\n### ⚠️ Important Workflow Notes\n\n- **Infrastructure Focus**: Terraform providers, Docker Compose services, custom images (Unbound), Ansible collections\n- **Testing Required**: Always test infrastructure changes in staging before applying to production\n- **Priority Levels**: Security (100) → Critical Components (10-8) → CI Tools (5) → General Updates (0 to -5)\n- **Label Guide**: `critical` = infrastructure-critical, `urgent` = security vulnerability, `build` = custom Docker images\n\n---",
+  "dependencyDashboardFooter": "---\n\n## 📚 Resources\n\n- [Renovate Config](https://gitlab.example.com/homelab/proxmox-infra/-/blob/main/renovate.json)\n- [Proxmox VE](https://pve.example.com) - Infrastructure host\n- [Terraform Docs](terraform/) - IaC configuration\n\n🤖 This dashboard is automatically maintained by Renovate Bot",
+  "vulnerabilityAlerts": {
+    "enabled": true,
+    "labels": ["security", "renovate"],
+    "minimumReleaseAge": "0 days"
+  },
+  "osvVulnerabilityAlerts": true,
+  "ignoreDeps": [],
+  "ignorePaths": [
+    "**/.github/**",
+    "**/.git/**",
+    "**/bower_components/**",
+    "**/node_modules/**",
+    "**/test/**",
+    "**/tests/**",
+    "**/_archive/**",
+    "services/_templates/**"
+  ],
+  "enabledManagers": [
+    "docker-compose",
+    "dockerfile",
+    "terraform",
+    "terraform-version",
+    "gitlabci",
+    "ansible",
+    "custom.regex"
+  ],
+  "customManagers": [
+    {
+      "description": "Extract tool versions from .gitlab-ci.yml with Renovate annotations",
+      "customType": "regex",
+      "managerFilePatterns": ["/^\\.gitlab-ci\\.yml$/"],
+      "matchStrings": [
+        "#\\s*renovate:\\s*datasource=(?<datasource>\\S+)\\s+depName=(?<depName>\\S+)(?:\\s+versioning=(?<versioning>\\S+))?(?:\\s+extractVersion=(?<extractVersion>\\S+))?\\s*\\n\\s*\\w+:\\s*[\"']?(?<currentValue>[^\"'\\s]+)[\"']?"
+      ],
+      "versioningTemplate": "{{#if versioning}}{{{versioning}}}{{else}}{{#if (equals datasource 'docker')}}docker{{else}}semver{{/if}}{{/if}}"
+    },
+    {
+      "description": "Extract Unbound version from docker/unbound/Dockerfile",
+      "customType": "regex",
+      "managerFilePatterns": ["/^docker/unbound/Dockerfile$/"],
+      "matchStrings": ["ARG UNBOUND_VERSION=(?<currentValue>[0-9.]+)"],
+      "datasourceTemplate": "github-tags",
+      "depNameTemplate": "NLnetLabs/unbound",
+      "extractVersionTemplate": "^release-(?<version>.+)$",
+      "versioningTemplate": "semver"
+    },
+    {
+      "description": "Extract OpenSSL version from docker/unbound/Dockerfile",
+      "customType": "regex",
+      "managerFilePatterns": ["/^docker/unbound/Dockerfile$/"],
+      "matchStrings": ["ARG OPENSSL_VERSION=(?<currentValue>[0-9.]+)"],
+      "datasourceTemplate": "github-releases",
+      "depNameTemplate": "openssl/openssl",
+      "extractVersionTemplate": "^openssl-(?<version>.+)$",
+      "versioningTemplate": "semver"
+    },
+    {
+      "description": "Extract Debian base image version from docker/unbound/Dockerfile ARG",
+      "customType": "regex",
+      "managerFilePatterns": ["/^docker/unbound/Dockerfile$/"],
+      "matchStrings": ["ARG DEBIAN_VERSION=(?<currentValue>[a-z0-9.-]+)"],
+      "datasourceTemplate": "docker",
+      "depNameTemplate": "debian",
+      "versioningTemplate": "docker"
+    }
+  ],
+  "hostRules": [],
+  "packageRules": [
+    {
+      "description": "Renovate self-updates - High priority updates with short stabilization period",
+      "matchDatasources": ["docker"],
+      "matchPackageNames": ["renovate/renovate", "renovatebot/renovate"],
+      "minimumReleaseAge": "3 days",
+      "commitMessagePrefix": "chore(renovate):",
+      "labels": ["renovate"],
+      "prPriority": 100
+    },
+    {
+      "description": "Docker Compose service images - Grouped by service directory with 5-day stabilization for production service reliability (excludes digest pinning)",
+      "matchFileNames": ["services/*/docker-compose.yml"],
+      "matchDatasources": ["docker"],
+      "matchUpdateTypes": ["major", "minor", "patch", "digest"],
+      "groupName": "{{parentDir}}-images",
+      "commitMessagePrefix": "chore({{parentDir}}):",
+      "additionalBranchPrefix": "{{parentDir}}-",
+      "labels": ["docker", "service"],
+      "prPriority": 3,
+      "minimumReleaseAge": "5 days"
+    },
+    {
+      "description": "Custom Docker base images - 7-day stabilization for build validation and testing of custom images like Unbound DNS (excludes digest pinning)",
+      "matchFileNames": ["docker/*/Dockerfile"],
+      "matchDatasources": ["docker"],
+      "matchUpdateTypes": ["major", "minor", "patch", "digest"],
+      "groupName": "docker-base-{{parentDir}}",
+      "commitMessagePrefix": "build(docker):",
+      "labels": ["docker", "build"],
+      "prPriority": 0,
+      "minimumReleaseAge": "7 days"
+    },
+    {
+      "description": "Debian base image for Unbound - Disable built-in dockerfile manager (handled by custom regex manager below)",
+      "matchFileNames": ["docker/unbound/Dockerfile"],
+      "matchDatasources": ["docker"],
+      "matchDepNames": ["debian"],
+      "matchManagers": ["dockerfile"],
+      "enabled": false
+    },
+    {
+      "description": "Debian base image for Unbound - 7-day stabilization for base OS updates to critical DNS resolver (no digest pinning)",
+      "matchFileNames": ["docker/unbound/Dockerfile"],
+      "matchDatasources": ["docker"],
+      "matchDepNames": ["debian"],
+      "matchManagers": ["custom.regex"],
+      "groupName": "unbound-debian",
+      "commitMessagePrefix": "build(unbound):",
+      "pinDigests": false,
+      "labels": ["docker", "unbound", "base-image"],
+      "prPriority": 5,
+      "minimumReleaseAge": "7 days"
+    },
+    {
+      "description": "Unbound DNS resolver version - 5-day stabilization for core DNS service updates from NLnetLabs upstream",
+      "matchFileNames": ["docker/unbound/Dockerfile"],
+      "matchDatasources": ["github-tags"],
+      "matchDepNames": ["NLnetLabs/unbound"],
+      "groupName": "unbound-version",
+      "commitMessagePrefix": "build(unbound):",
+      "labels": ["unbound", "application"],
+      "prPriority": 10,
+      "minimumReleaseAge": "5 days"
+    },
+    {
+      "description": "OpenSSL library version - 5-day stabilization for security library updates used by Unbound DNS resolver",
+      "matchFileNames": ["docker/unbound/Dockerfile"],
+      "matchDatasources": ["github-releases"],
+      "matchDepNames": ["openssl/openssl"],
+      "groupName": "unbound-openssl",
+      "commitMessagePrefix": "build(unbound):",
+      "labels": ["openssl", "security"],
+      "prPriority": 8,
+      "minimumReleaseAge": "5 days"
+    },
+    {
+      "description": "Terraform providers - Grouped updates with 7-day stabilization for Infrastructure as Code validation across LXC and VM environments",
+      "matchFileNames": [
+        "terraform/lxc/versions.tf",
+        "terraform/linux-vms/versions.tf",
+        "terraform/windows-vms/versions.tf"
+      ],
+      "matchDatasources": ["terraform-provider"],
+      "groupName": "terraform-providers",
+      "commitMessagePrefix": "build(terraform):",
+      "labels": ["terraform", "infrastructure"],
+      "prPriority": -2,
+      "minimumReleaseAge": "7 days"
+    },
+    {
+      "description": "Terraform Proxmox provider - Most critical component with 7-day stabilization, tracks RC versions for early testing of infrastructure changes",
+      "matchFileNames": ["terraform/*/versions.tf"],
+      "matchDatasources": ["terraform-provider"],
+      "matchDepNames": ["Telmate/proxmox"],
+      "groupName": "proxmox-provider",
+      "commitMessagePrefix": "build(terraform):",
+      "labels": ["terraform", "proxmox", "critical"],
+      "prPriority": 10,
+      "minimumReleaseAge": "7 days",
+      "versioning": "semver",
+      "ignoreUnstable": false
+    },
+    {
+      "description": "Ansible Galaxy collections - Grouped updates with 5-day stabilization for configuration management automation",
+      "matchFileNames": ["ansible/requirements.yml"],
+      "matchDatasources": ["galaxy-collection"],
+      "groupName": "ansible-collections",
+      "commitMessagePrefix": "chore(ansible):",
+      "labels": ["ansible", "configuration"],
+      "prPriority": 2,
+      "minimumReleaseAge": "5 days"
+    },
+    {
+      "description": "CI/CD tools - GitLab CI pipeline tool versions extracted by custom regex without digest pinning, separate PRs per tool",
+      "matchFileNames": [".gitlab-ci.yml"],
+      "matchManagers": ["custom.regex"],
+      "pinDigests": false,
+      "commitMessagePrefix": "ci({{depName}}):",
+      "labels": ["ci", "automation"],
+      "prPriority": 8,
+      "minimumReleaseAge": "7 days"
+    },
+    {
+      "description": "Major version updates - Breaking changes deferred 7 days for careful review and infrastructure compatibility testing",
+      "matchUpdateTypes": ["major"],
+      "commitMessagePrefix": "chore(deps):",
+      "labels": ["major-update", "breaking-change"],
+      "prPriority": -5,
+      "minimumReleaseAge": "7 days"
+    },
+    {
+      "description": "Docker digest pinning - Pin floating tags to reproducible digests for infrastructure reliability (no stabilization needed - same version)",
+      "matchDatasources": ["docker"],
+      "matchUpdateTypes": ["pin"],
+      "groupName": "pin-docker-digests",
+      "commitMessagePrefix": "fix({{parentDir}}):",
+      "labels": ["ci", "pinning"],
+      "prPriority": 9,
+      "minimumReleaseAge": "0 days"
+    },
+    {
+      "description": "Disable updates for unstable/alpha/beta versions by default",
+      "ignoreUnstable": true,
+      "matchPackageNames": ["/.*/"]
+    }
+  ],
+  "prBodyTemplate": "{{{header}}}{{{table}}}{{{warnings}}}{{{notes}}}{{{changelogs}}}{{{configDescription}}}{{{controls}}}{{{footer}}}",
+  "prBodyColumns": [
+    "Package",
+    "Update",
+    "Type",
+    "New value",
+    "Package file",
+    "References"
+  ],
+  "prBodyDefinitions": {
+    "Package": "{{{depNameLinked}}}{{#if newName}}{{#unless (equals depName newName)}} → {{{newNameLinked}}}{{/unless}}{{/if}}",
+    "Type": "{{{depType}}}",
+    "Update": "{{{updateType}}}",
+    "Current value": "{{{currentValue}}}",
+    "New value": "{{{newValue}}}",
+    "Change": "`{{{displayFrom}}}` → `{{{displayTo}}}`",
+    "Pending": "{{{displayPending}}}",
+    "References": "{{{references}}}",
+    "Package file": "{{{packageFile}}}",
+    "Age": "{{#if newVersion}}![age](https://developer.mend.io/api/mc/badges/age/{{datasource}}/{{replace '/' '%2f' packageName}}/{{{newVersion}}}?slim=true){{/if}}",
+    "Adoption": "{{#if newVersion}}![adoption](https://developer.mend.io/api/mc/badges/adoption/{{datasource}}/{{replace '/' '%2f' packageName}}/{{{newVersion}}}?slim=true){{/if}}",
+    "Passing": "{{#if newVersion}}![passing](https://developer.mend.io/api/mc/badges/compatibility/{{datasource}}/{{replace '/' '%2f' packageName}}/{{{currentVersion}}}/{{{newVersion}}}?slim=true){{/if}}",
+    "Confidence": "{{#if newVersion}}![confidence](https://developer.mend.io/api/mc/badges/confidence/{{datasource}}/{{replace '/' '%2f' packageName}}/{{{currentVersion}}}/{{{newVersion}}}?slim=true){{/if}}"
+  },
+  "prFooter": "🤖 This MR was created automatically by Renovate Bot. Review changes carefully before merging.\n\n⚠️ **Important**: After merging infrastructure changes:\n- Test in staging environment before applying to production Proxmox hosts\n- For Terraform changes: Review plan output before applying\n- For Docker Compose services: Verify service health after deployment\n- For custom Docker images: Rebuild and test before deploying to services",
+  "suppressNotifications": ["prIgnoreNotification"],
+  "postUpdateOptions": [],
+  "lockFileMaintenance": {
+    "enabled": false,
+    "description": "Disabled for infrastructure - no lock files in this repository (Terraform uses provider constraints, not lock files)"
+  }
+}

@@ -1,0 +1,226 @@
+---
+# ============================================================================
+# Apply Talos Machine Configurations to Nodes
+# ============================================================================
+# This playbook applies generated Talos machine configs to VMs via the Talos API.
+# Configs must be generated first with 01-generate-configs.yml.
+#
+# Network Configuration:
+#   - Static IPs are configured via per-node patches in patches/nodes/
+#   - MAC addresses are locked in Terraform (see terraform/talos-vms)
+#
+# Prerequisites:
+#   - talosctl installed
+#   - Talos VMs created (can be stopped)
+#   - Machine configs generated in configs/ directory
+#   - Per-node network patches in patches/nodes/<hostname>.yaml
+#
+# Usage:
+#   cd /home/user/projects/proxmox-infra/ansible/talos
+#   make apply-configs
+#   OR
+#   ansible-playbook -i inventory/hosts.yml ../playbooks/talos/02-apply-configs.yml
+# ============================================================================
+
+- name: Start Talos VMs if not running
+  hosts: talos
+  gather_facts: false
+  become: false  # Talos uses API - no privilege escalation needed
+  connection: local
+  serial: 1
+
+  tasks:
+    - name: Check VM status
+      ansible.builtin.uri:
+        url: 'https://{{ proxmox_api_host }}:{{ proxmox_api_port }}/api2/json/nodes/{{ proxmox_node }}/qemu/{{ vmid }}/status/current'
+        method: GET
+        headers:
+          Authorization: 'PVEAPIToken={{ proxmox_api_user }}!{{ proxmox_api_token_id }}={{ proxmox_api_token_secret }}'
+        validate_certs: false
+        status_code: [200]
+      register: vm_status
+      delegate_to: localhost
+
+    - name: Start VM on Proxmox
+      ansible.builtin.uri:
+        url: 'https://{{ proxmox_api_host }}:{{ proxmox_api_port }}/api2/json/nodes/{{ proxmox_node }}/qemu/{{ vmid }}/status/start'
+        method: POST
+        headers:
+          Authorization: 'PVEAPIToken={{ proxmox_api_user }}!{{ proxmox_api_token_id }}={{ proxmox_api_token_secret }}'
+        validate_certs: false
+        status_code: [200]
+      register: start_result
+      delegate_to: localhost
+      when: vm_status.json.data.status != 'running'
+
+    - name: Wait for VM to boot (30 seconds)
+      ansible.builtin.pause:
+        seconds: 30
+      delegate_to: localhost
+      when: vm_status.json.data.status != 'running'
+
+- name: Apply Talos configurations to nodes
+  hosts: talos
+  gather_facts: false
+  become: false  # Talos uses API - no privilege escalation needed
+  connection: local
+
+  tasks:
+    - name: Display node information
+      ansible.builtin.debug:
+        msg: |
+          Node: {{ inventory_hostname }}
+          IP: {{ ansible_host }}
+          Role: {{ talos_role }}
+      delegate_to: localhost
+
+    - name: Check talosctl and configs
+      ansible.builtin.include_role:
+        name: talos_cluster
+        tasks_from: '{{ item }}'
+      loop:
+        - check_talosctl
+        - check_configs
+      run_once: true
+
+    - name: Determine config file to apply
+      ansible.builtin.set_fact:
+        config_file: '{{ talos_config_dir }}/{{ inventory_hostname }}.yaml'
+      delegate_to: localhost
+
+    - name: Verify config file exists
+      ansible.builtin.stat:
+        path: '{{ config_file }}'
+      register: machine_config_stat
+      delegate_to: localhost
+
+    - name: Fail if config not found
+      ansible.builtin.fail:
+        msg: |
+          Config file not found: {{ config_file }}
+          Generate configs first:
+            cd talos && make generate-configs
+      when: not machine_config_stat.stat.exists
+
+    - name: Check if node is already configured (test authenticated API)
+      ansible.builtin.command:
+        cmd: >
+          talosctl version
+          --talosconfig {{ talos_config_file }}
+          --nodes {{ ansible_host }}
+          --endpoints {{ ansible_host }}
+      environment:
+        TALOSCONFIG: '{{ talos_config_file }}'
+      register: auth_check
+      changed_when: false
+      failed_when: false
+      delegate_to: localhost
+
+    - name: Apply configuration (insecure mode for first boot)
+      ansible.builtin.command:
+        cmd: >
+          talosctl apply-config
+          --talosconfig {{ talos_config_file }}
+          --nodes {{ ansible_host }}
+          --endpoints {{ ansible_host }}
+          --file {{ config_file }}
+          --insecure
+      environment:
+        TALOSCONFIG: '{{ talos_config_file }}'
+      register: apply_config_insecure
+      changed_when: "'config applied' in apply_config_insecure.stdout or apply_config_insecure.rc == 0"
+      failed_when: false
+      delegate_to: localhost
+      when: auth_check.rc != 0
+
+    - name: Apply configuration (authenticated mode for updates)
+      ansible.builtin.command:
+        cmd: >
+          talosctl apply-config
+          --talosconfig {{ talos_config_file }}
+          --nodes {{ ansible_host }}
+          --endpoints {{ ansible_host }}
+          --file {{ config_file }}
+      environment:
+        TALOSCONFIG: '{{ talos_config_file }}'
+      register: apply_config_auth
+      changed_when: "'config applied' in apply_config_auth.stdout or apply_config_auth.rc == 0"
+      failed_when: false
+      delegate_to: localhost
+      when: auth_check.rc == 0
+
+    - name: Set apply result variable
+      ansible.builtin.set_fact:
+        apply_config_result: '{{ apply_config_insecure if auth_check.rc != 0 else apply_config_auth }}'
+
+    - name: Display apply result
+      ansible.builtin.debug:
+        msg: |
+          Node: {{ inventory_hostname }}
+          Role: {{ talos_role }}
+          IP: {{ ansible_host }}
+          Mode: {{ 'Insecure (first boot)' if auth_check.rc != 0 else 'Authenticated (update)' }}
+          Status: {{ 'Applied' if apply_config_result.rc == 0 else 'Failed' }}
+          {% if apply_config_result.stderr %}
+          Error: {{ apply_config_result.stderr }}
+          {% endif %}
+
+    - name: Wait for node to reboot and API to become ready
+      ansible.builtin.include_role:
+        name: talos_cluster
+        tasks_from: wait_for_api
+      vars:
+        talos_cluster_node_ip: '{{ ansible_host }}'
+      when: apply_config_result.rc == 0
+
+    - name: Verify Talos API responds after config application
+      ansible.builtin.command:
+        cmd: >
+          talosctl version
+          --talosconfig {{ talos_config_file }}
+          --nodes {{ ansible_host }}
+          --endpoints {{ ansible_host }}
+      environment:
+        TALOSCONFIG: '{{ talos_config_file }}'
+      register: api_check
+      changed_when: false
+      failed_when: false
+      delegate_to: localhost
+      retries: 3
+      delay: 10
+      until: api_check.rc == 0
+
+    - name: Display API connectivity status
+      ansible.builtin.debug:
+        msg: |
+          Node: {{ inventory_hostname }}
+          API: {{ 'Reachable' if api_check.rc == 0 else 'Not reachable' }}
+          Note: Cluster health cannot be checked until after bootstrap
+
+- name: Summary
+  hosts: localhost
+  gather_facts: false
+  become: false  # Talos uses API - no privilege escalation needed
+  tasks:
+    - name: Display completion summary
+      ansible.builtin.debug:
+        msg: |
+          ============================================================================
+          ✓ Talos machine configurations applied!
+          ============================================================================
+
+          Control plane nodes and workers are now configured.
+
+          Next steps:
+          1. Verify all nodes are healthy:
+               cd talos && make verify
+          2. Bootstrap the Kubernetes cluster:
+               cd talos && make bootstrap
+
+          Note: Cluster is NOT bootstrapped yet - etcd and Kubernetes are not running.
+                Only machine configurations have been applied.
+
+          To check node status manually:
+               export TALOSCONFIG={{ playbook_dir }}/../../talos/configs/talosconfig
+               talosctl health --nodes <node-ip>
+          ============================================================================

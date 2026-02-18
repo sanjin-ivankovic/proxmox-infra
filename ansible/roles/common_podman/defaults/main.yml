@@ -1,0 +1,45 @@
+---
+# ansible/roles/common_podman/defaults/main.yml
+
+# User configuration
+common_podman_user: "{{ user | default('maintainer') }}"
+
+# Directory structure
+common_podman_dir: '/srv/podman'
+common_podman_config_dir: '/etc/containers'
+common_podman_create_readme: true
+
+# Package configuration
+common_podman_packages:
+  - podman
+  - podman-compose
+  - buildah
+  - skopeo
+
+# Podman configuration
+common_podman_cgroup_manager: 'cgroupfs'
+common_podman_network_backend: 'netavark'
+common_podman_events_logger: 'file'
+
+# Registry configuration
+common_podman_registries:
+  - 'docker.io'
+  - 'quay.io'
+  - 'ghcr.io'
+
+common_podman_default_registry: 'docker.io'
+
+# Rootless configuration
+common_podman_enable_user_lingering: true
+common_podman_enable_socket: true
+
+# Environment variables
+common_podman_export_runtime_dir: true
+common_podman_export_dbus_address: true
+
+# Aliases and utilities
+common_podman_deploy_aliases: true
+
+# Testing
+common_podman_test_run: false
+common_podman_verify_installation: true

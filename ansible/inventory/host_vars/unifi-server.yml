@@ -1,0 +1,6 @@
+---
+# ansible/inventory/host_vars/unifi-server.yml
+# Host-specific configuration for unifi-server
+
+# Disable Docker monitoring for this host
+checkmk_agent_enable_docker_monitoring: false

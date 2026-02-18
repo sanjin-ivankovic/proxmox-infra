@@ -1,0 +1,174 @@
+---
+# ============================================================================
+# Bootstrap Talos Kubernetes Cluster
+# ============================================================================
+# This playbook initializes etcd and bootstraps the Kubernetes control plane.
+# Only run this ONCE on the FIRST control plane node.
+#
+# Prerequisites:
+#   - talosctl installed
+#   - Machine configs applied to all nodes (02-apply-configs.yml)
+#   - All nodes healthy and ready
+#
+# Usage:
+#   cd /home/user/projects/proxmox-infra/ansible/talos
+#   make bootstrap
+#   OR
+#   ansible-playbook -i inventory/hosts.yml ../playbooks/talos/03-bootstrap.yml
+# ============================================================================
+
+- name: Bootstrap Talos Kubernetes cluster
+  hosts: localhost
+  gather_facts: false
+  become: false  # Talos uses API - no privilege escalation needed
+
+  tasks:
+    - name: Check prerequisites
+      ansible.builtin.include_role:
+        name: talos_cluster
+        tasks_from: '{{ item }}'
+      loop:
+        - check_talosctl
+        - check_configs
+
+    - name: Set first control plane IP
+      ansible.builtin.set_fact:
+        first_cp_ip: '{{ groups["controlplane"][0] }}'
+        first_cp_node_ip: "{{ hostvars[groups['controlplane'][0]]['ansible_host'] }}"
+
+    - name: Display bootstrap target
+      ansible.builtin.debug:
+        msg: 'Bootstrapping on {{ first_cp_ip }} ({{ first_cp_node_ip }}). VIP will be announced after bootstrap.'
+
+    - name: Display bootstrap information
+      ansible.builtin.debug:
+        msg: |
+          ============================================================================
+          Bootstrapping Talos Kubernetes Cluster
+          ============================================================================
+
+          Control Plane Node: {{ first_cp_ip }} ({{ first_cp_node_ip }})
+          TALOSCONFIG: {{ talos_config_file }}
+
+          ⚠️  This initializes etcd and Kubernetes on the first control plane node.
+          ⚠️  Other control planes will join automatically.
+          ⚠️  VIP {{ talos_vip_address }} will be announced after bootstrap.
+
+          ============================================================================
+
+    - name: Verify Talos API is reachable
+      ansible.builtin.wait_for:
+        host: '{{ first_cp_node_ip }}'
+        port: 50000
+        timeout: 30
+        msg: 'Talos API not reachable on {{ first_cp_node_ip }}:50000'
+
+    - name: Bootstrap Kubernetes cluster
+      ansible.builtin.command:
+        cmd: >
+          talosctl bootstrap
+          --talosconfig {{ talos_config_file }}
+          --nodes {{ first_cp_node_ip }}
+          --endpoints {{ first_cp_node_ip }}
+      environment:
+        TALOSCONFIG: '{{ talos_config_file }}'
+      register: bootstrap_result
+      changed_when: bootstrap_result.rc == 0
+      failed_when: false
+
+    - name: Display bootstrap result
+      ansible.builtin.debug:
+        msg: |
+          Bootstrap Status: {{ 'Success' if bootstrap_result.rc == 0 else 'Failed (may already be bootstrapped)' }}
+          {% if bootstrap_result.stdout %}
+          Output: {{ bootstrap_result.stdout }}
+          {% endif %}
+          {% if bootstrap_result.stderr and bootstrap_result.rc != 0 %}
+          Error: {{ bootstrap_result.stderr }}
+          {% endif %}
+
+    - name: Wait for Kubernetes API to become available
+      ansible.builtin.command:
+        cmd: >
+          talosctl health
+          --talosconfig {{ talos_config_file }}
+          --nodes {{ first_cp_node_ip }}
+          --endpoints {{ first_cp_node_ip }}
+          --wait-timeout 5m
+      environment:
+        TALOSCONFIG: '{{ talos_config_file }}'
+      register: k8s_ready
+      changed_when: false
+      failed_when: false
+      retries: 10
+      delay: 30
+      until: k8s_ready.rc == 0
+
+    - name: Retrieve kubeconfig from cluster
+      ansible.builtin.command:
+        cmd: >
+          talosctl kubeconfig
+          --talosconfig {{ talos_config_file }}
+          --nodes {{ first_cp_node_ip }}
+          --endpoints {{ first_cp_node_ip }}
+          --force
+          {{ talos_kubeconfig_file }}
+      environment:
+        TALOSCONFIG: '{{ talos_config_file }}'
+      register: kubeconfig_result
+      changed_when: kubeconfig_result.rc == 0
+
+    - name: Set kubeconfig permissions
+      ansible.builtin.file:
+        path: '{{ talos_kubeconfig_file }}'
+        mode: '0600'
+      when: kubeconfig_result.rc == 0
+
+    - name: Verify cluster is accessible
+      ansible.builtin.command:
+        cmd: kubectl --kubeconfig {{ talos_kubeconfig_file }} get nodes
+      environment:
+        KUBECONFIG: '{{ talos_kubeconfig_file }}'
+      register: nodes_check
+      changed_when: false
+      failed_when: false
+
+    - name: Display cluster nodes
+      ansible.builtin.debug:
+        msg: |
+          {% if nodes_check.rc == 0 %}
+          ✓ Cluster nodes:
+          {{ nodes_check.stdout }}
+          {% else %}
+          ⚠ Unable to retrieve nodes (cluster may still be initializing)
+          {% endif %}
+
+    - name: Summary
+      ansible.builtin.debug:
+        msg: |
+          ============================================================================
+          ✓ Talos Kubernetes Cluster Bootstrapped!
+          ============================================================================
+
+          Control Plane: {{ first_cp_ip }} ({{ first_cp_node_ip }})
+          VIP: {{ talos_vip_address }} (announced after bootstrap)
+          Kubeconfig: {{ talos_kubeconfig_file }}
+
+          Set your kubeconfig:
+            export KUBECONFIG={{ talos_kubeconfig_file }}
+
+          Verify cluster:
+            kubectl get nodes
+            kubectl get pods -A
+
+          Check Talos health:
+            export TALOSCONFIG={{ talos_config_file }}
+            talosctl health --nodes {{ talos_vip_address }}
+
+          Next steps:
+          1. Verify all nodes joined: make verify
+          2. Install CNI (Cilium/Calico): Follow infrastructure setup
+          3. Install storage (Longhorn): Follow infrastructure setup
+          4. Deploy ArgoCD for GitOps: Follow argo-apps repo
+
+          ============================================================================

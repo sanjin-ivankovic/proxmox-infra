@@ -1,0 +1,8 @@
+---
+# ansible/group_vars/all.yml
+
+# User configuration
+user: maintainer
+
+# System configuration
+# Add your LXC-specific variables here

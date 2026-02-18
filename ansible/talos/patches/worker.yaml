@@ -1,0 +1,29 @@
+---
+# ============================================================================
+# Talos Machine Config Patch - Worker Nodes
+# ============================================================================
+# This patch is applied only to worker nodes.
+#
+# Usage: Applied automatically during config generation via
+#        talosctl gen config --config-patch-worker @patches/worker.yaml
+# ============================================================================
+
+machine:
+  # Kubelet configuration optimized for workers
+  kubelet:
+    extraArgs:
+      # Apply node labels during kubelet registration
+      # Only homelab-specific labels - Kubernetes will auto-assign the worker role
+      node-labels: "homelab.example.com/node-type=worker"
+
+      # Increase pod eviction thresholds for workload stability
+      eviction-hard: "memory.available<256Mi,nodefs.available<10%,imagefs.available<10%"
+      eviction-soft: "memory.available<512Mi,nodefs.available<15%,imagefs.available<15%"
+      eviction-soft-grace-period: "memory.available=1m30s,nodefs.available=2m,imagefs.available=2m"
+
+      # Allow more pods per node (default is 110)
+      max-pods: "150"
+
+  # Disable swap (required for Kubernetes)
+  sysctls:
+    vm.swappiness: "0"

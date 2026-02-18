@@ -1,0 +1,716 @@
+---
+# ==============================================================================
+# GitLab CI/CD Pipeline for Proxmox Infrastructure
+# ==============================================================================
+#
+# Purpose:
+#   Automated GitOps deployment of Docker services to Proxmox LXC containers
+#   with comprehensive validation, health checks, and rollback capabilities.
+#
+# Pipeline Stages:
+#   1. build-tools  - Build Golden CI Image with linting tools
+#   2. test         - Test Python CI scripts with pytest and coverage
+#   3. lint         - Shell/YAML/Markdown linting with Code Quality integration
+#   4. build-images - Build custom Docker images (Pi-hole, Unbound)
+#   5. generate     - Generate dynamic child pipeline based on changed services
+#   6. trigger      - Trigger child pipeline with service-specific jobs
+#   7. security     - Secret scanning with Gitleaks (SARIF reports)
+#   8. publish      - Sanitize and publish to GitHub portfolio
+#   9. renovate     - Automated dependency updates (scheduled)
+#
+# Child Pipeline Stages (dynamically generated per service):
+#   - validate  - Docker Compose syntax validation
+#   - preflight - SSH connectivity, Docker daemon, disk space checks
+#   - backup    - Automated backup before deployment
+#   - deploy    - Docker Compose deployment (manual approval on main)
+#   - verify    - Post-deployment health checks
+#
+# Key Features:
+#   - Python-based CI/CD orchestration with comprehensive type safety
+#   - Automated testing of CI scripts with pytest and coverage tracking
+#   - Bash-based infrastructure scripts for SSH/Docker operations
+#   - Golden CI Image strategy for consistent, fast builds
+#   - Dynamic child pipeline generation based on changed services
+#   - Auto-discovery of changed services (git diff-based)
+#   - Modular linting with smart change detection (Shell, YAML, Markdown)
+#   - GitLab Code Quality integration for YAML linting
+#   - Secret scanning with Gitleaks (SARIF reports for Security Dashboard)
+#   - Idempotent deployments with checksum-based change detection
+#   - Pre-flight checks (SSH, Docker daemon, disk space)
+#   - Automated backups before every deployment
+#   - Health verification with Docker healthcheck integration
+#   - Resource group prevents concurrent deployments
+#   - Sanitized GitHub portfolio with security verification
+#
+# Maintainer: maintainer@example.io
+# Repository: https://gitlab.example.com/homelab/proxmox-infra
+# ==============================================================================
+
+# ==============================================================================
+# Pipeline Stages
+# ==============================================================================
+
+stages:
+  - build-tools # Build CI image (needed by lint)
+  - test # Test Python CI scripts before using them
+  - lint # Fast feedback - fail fast!
+  - build-images # Build service images (after lint passes)
+  - generate # Generate dynamic child pipeline
+  - trigger # Trigger child pipeline with service jobs
+  - security
+  - publish
+  - renovate
+
+# ==============================================================================
+# Global Variables
+# ==============================================================================
+
+variables:
+  # Docker Images
+  # renovate: datasource=docker depName=docker versioning=docker
+  DOCKER_BASE_VERSION: "29.2.1"
+  DOCKER_VERSION: "29.1.4-cli"
+  CI_IMAGE: "${CI_REGISTRY_IMAGE}/ci:latest"
+
+  # CI/CD Tools
+  # renovate: datasource=docker depName=renovate/renovate
+  RENOVATE_VERSION: "43.6"
+
+  # Linting Tools
+  # renovate: datasource=pypi depName=yamllint
+  YAMLLINT_VERSION: "1.38.0"
+  # renovate: datasource=docker depName=koalaman/shellcheck-alpine
+  SHELLCHECK_VERSION: "v0.11.0"
+  # renovate: datasource=npm depName=markdownlint-cli2
+  MARKDOWNLINT_VERSION: "0.20.0"
+
+  # Python Dependencies
+  # renovate: datasource=pypi depName=pyyaml
+  PYYAML_VERSION: "6.0.3"
+  # renovate: datasource=pypi depName=tqdm
+  TQDM_VERSION: "4.67.3"
+
+  # Testing Tools
+  # renovate: datasource=pypi depName=pytest
+  PYTEST_VERSION: "9.0.2"
+  # renovate: datasource=pypi depName=pytest-cov
+  PYTEST_COV_VERSION: "7.0.0"
+
+  # Security Tools
+  # renovate: datasource=github-releases depName=gitleaks/gitleaks
+  GITLEAKS_VERSION: "v8.30.0"
+
+  # Service Deployment
+  SSH_USER: maintainer
+  DOCKER_COMPOSE_DIR: /srv/docker
+  SERVICES_DIR: services
+
+  # Git Configuration
+  # Full history required for accurate change detection
+  GIT_DEPTH: 0
+
+# ==============================================================================
+# Job Templates
+# ==============================================================================
+# Reusable job configurations to reduce duplication
+
+.base-job:
+  image: $CI_IMAGE
+  tags:
+    - talos
+
+# ==============================================================================
+# Build Stage - Golden CI Image
+# ==============================================================================
+# Builds a Docker image containing all CI tools to ensure consistent,
+# fast pipeline execution
+
+.build-image-gitlab:
+  # Don't extend .base-job - use docker:cli directly (can't use CI image to build itself!)
+  image: docker:${DOCKER_VERSION}
+  stage: build
+  services:
+    - name: docker:${DOCKER_BASE_VERSION}-dind
+      command: ["--mtu=1300"]
+  variables:
+    # Docker-in-Docker configuration for Kubernetes executor
+    # Use Unix socket (DinD shares /var/run via emptyDir volume)
+    DOCKER_HOST: unix:///var/run/docker.sock
+    # Disable TLS
+    DOCKER_TLS_CERTDIR: ""
+  tags:
+    - talos
+  before_script:
+    # Wait for Docker socket to be created and fix permissions
+    - |
+      echo "Waiting for Docker socket to be created..."
+      timeout=30
+      until [ -S /var/run/docker.sock ] || [ $timeout -eq 0 ]; do
+        echo "Waiting for docker.sock... ($timeout seconds remaining)"
+        sleep 1
+        timeout=$((timeout - 1))
+      done
+      if [ $timeout -eq 0 ]; then
+        echo "ERROR: docker.sock was not created within 30 seconds"
+        ls -la /var/run/ 2>&1
+        exit 1
+      fi
+      echo "Socket found! Fixing permissions..."
+      chmod 666 /var/run/docker.sock
+    # Wait for Docker daemon to be ready
+    - |
+      echo "Waiting for Docker daemon to be ready..."
+      timeout=30
+      until docker info >/dev/null 2>&1 || [ $timeout -eq 0 ]; do
+        echo "Waiting for docker daemon... ($timeout seconds remaining)"
+        sleep 1
+        timeout=$((timeout - 1))
+      done
+      if [ $timeout -eq 0 ]; then
+        echo "ERROR: Docker daemon failed to respond within 30 seconds"
+        docker info 2>&1 || true
+        exit 1
+      fi
+      echo "Docker daemon is ready!"
+      docker info
+    # Authenticate with Docker Hub to avoid rate limits
+    - |
+      if [ -n "$DOCKER_HUB_USERNAME" ] && [ -n "$DOCKER_HUB_TOKEN" ]; then
+        echo "Authenticating with Docker Hub..."
+        echo "$DOCKER_HUB_TOKEN" | docker login -u "$DOCKER_HUB_USERNAME" \
+          --password-stdin docker.io
+        echo "✅ Docker Hub authentication successful"
+      else
+        echo "⚠️  WARNING: DOCKER_HUB_USERNAME or DOCKER_HUB_TOKEN not set"
+        echo "⚠️  Proceeding with unauthenticated pulls (rate limited to 100/6h)"
+      fi
+    # Authenticate with GitLab registry to push built images
+    - |
+      echo "$CI_JOB_TOKEN" | docker login -u "$CI_REGISTRY_USER" \
+        --password-stdin "$CI_REGISTRY"
+  script:
+    - cd "$BUILD_CONTEXT"
+    # MTU set to 1300 in DinD service to fix Alpine apk networking issues
+    # See: https://github.com/gliderlabs/docker-alpine/issues/307
+    - |
+      docker buildx build \
+        --progress=plain \
+        --platform linux/amd64 \
+        --cache-from type=registry,ref="$IMAGE_NAME:buildcache" \
+        --cache-to type=registry,ref="$IMAGE_NAME:buildcache",mode=max \
+        --build-arg DOCKER_VERSION=${DOCKER_VERSION} \
+        --build-arg GITLEAKS_VERSION=${GITLEAKS_VERSION} \
+        --build-arg YAMLLINT_VERSION=${YAMLLINT_VERSION} \
+        --build-arg SHELLCHECK_VERSION=${SHELLCHECK_VERSION} \
+        --build-arg MARKDOWNLINT_VERSION=${MARKDOWNLINT_VERSION} \
+        --build-arg PYYAML_VERSION=${PYYAML_VERSION} \
+        --build-arg TQDM_VERSION=${TQDM_VERSION} \
+        --build-arg PYTEST_VERSION=${PYTEST_VERSION} \
+        --build-arg PYTEST_COV_VERSION=${PYTEST_COV_VERSION} \
+        -t "$IMAGE_NAME:latest" \
+        --push \
+        .
+
+# Build CI image with linting tools (ShellCheck, yamllint, markdownlint, Gitleaks)
+build:ci-image:
+  extends: .build-image-gitlab
+  stage: build-tools
+  variables:
+    IMAGE_NAME: $CI_REGISTRY_IMAGE/ci
+    BUILD_CONTEXT: docker/ci
+  rules:
+    # Exclude scheduled pipelines (Renovate runs separately)
+    - if: '$CI_PIPELINE_SOURCE == "schedule"'
+      when: never
+    # Run on Renovate MRs that update CI dependencies
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_SOURCE_BRANCH_NAME =~ /^renovate\//'
+      changes:
+        - "docker/ci/**/*"
+        - ".gitlab-ci.yml"
+    # Run on main branch when CI image changes
+    - if: '$CI_COMMIT_BRANCH == "main"'
+      changes:
+        - "docker/ci/**/*"
+        - ".gitlab-ci.yml"
+    # Run on manual trigger via web UI
+    - if: $CI_PIPELINE_SOURCE == "web"
+
+# ==============================================================================
+# Test Stage - CI Scripts
+# ==============================================================================
+# Test Python CI scripts with pytest and coverage reporting
+
+test:ci-scripts:
+  extends: .base-job
+  stage: test
+  needs:
+    - job: build:ci-image
+      optional: true
+  script:
+    - cd scripts/ci
+    - pytest -v
+  coverage: '/TOTAL.*\s+(\d+%)$/'
+  artifacts:
+    reports:
+      coverage_report:
+        coverage_format: cobertura
+        path: scripts/ci/coverage.xml
+    paths:
+      - scripts/ci/htmlcov/
+    expire_in: 7 days
+    when: always
+  rules:
+    # Run on github_sync schedule (before publish job)
+    - if: '$CI_PIPELINE_SOURCE == "schedule" && $SCHEDULE_TYPE == "github_sync"'
+      when: always
+    # Exclude other scheduled pipelines
+    - if: '$CI_PIPELINE_SOURCE == "schedule"'
+      when: never
+    # Run on git tags
+    - if: "$CI_COMMIT_TAG"
+    # Run on merge requests when Python CI scripts change
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+      changes:
+        - "scripts/ci/**/*.py"
+        - "scripts/ci/requirements.txt"
+        - "scripts/ci/pytest.ini"
+    # Run on main branch when Python CI scripts change
+    - if: '$CI_COMMIT_BRANCH == "main"'
+      changes:
+        - "scripts/ci/**/*.py"
+        - "scripts/ci/requirements.txt"
+        - "scripts/ci/pytest.ini"
+
+# ==============================================================================
+# Lint Stage - Code Quality
+# ==============================================================================
+# Shell, YAML, and Markdown linting with GitLab Code Quality integration
+
+# Lint shell scripts with ShellCheck for syntax and best practices
+lint:shellcheck:
+  extends: .base-job
+  stage: lint
+  needs:
+    - job: test:ci-scripts
+      optional: true
+  script:
+    - python3 scripts/ci/lint_shell.py --verbose
+  rules:
+    # Exclude scheduled pipelines (Renovate runs separately)
+    - if: '$CI_PIPELINE_SOURCE == "schedule"'
+      when: never
+    # Run on git tags
+    - if: "$CI_COMMIT_TAG"
+    # Run on merge requests when shell scripts change
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+      changes:
+        - "**/*.sh"
+        - "scripts/ci/**/*.sh"
+        - "scripts/ci/lint_shell.py"
+    # Run on main branch when shell scripts change
+    - if: '$CI_COMMIT_BRANCH == "main"'
+      changes:
+        - "**/*.sh"
+        - "scripts/ci/**/*.sh"
+        - "scripts/ci/lint_shell.py"
+
+# Lint YAML files with yamllint and generate Code Quality report
+lint:yaml:
+  extends: .base-job
+  stage: lint
+  needs:
+    - job: test:ci-scripts
+      optional: true
+  script:
+    - >
+      python3 scripts/ci/lint_yaml.py --format gitlab --verbose
+      > gl-code-quality-report.json || true
+  artifacts:
+    reports:
+      codequality: gl-code-quality-report.json
+    when: always
+    expire_in: 1 week
+  rules:
+    # Exclude scheduled pipelines (Renovate runs separately)
+    - if: '$CI_PIPELINE_SOURCE == "schedule"'
+      when: never
+    # Run on git tags
+    - if: "$CI_COMMIT_TAG"
+    # Run on merge requests when YAML files change
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+      changes:
+        - "**/*.yaml"
+        - "**/*.yml"
+        - ".yamllint"
+        - "scripts/ci/lint_yaml.py"
+    # Run on main branch when YAML files change
+    - if: '$CI_COMMIT_BRANCH == "main"'
+      changes:
+        - "**/*.yaml"
+        - "**/*.yml"
+        - ".yamllint"
+        - "scripts/ci/lint_yaml.py"
+
+# Lint Markdown files with markdownlint for documentation quality
+lint:markdown:
+  extends: .base-job
+  stage: lint
+  needs:
+    - job: test:ci-scripts
+      optional: true
+  script:
+    - python3 scripts/ci/lint_markdown.py --verbose
+  artifacts:
+    when: on_failure
+    expire_in: 1 week
+  rules:
+    # Exclude scheduled pipelines (Renovate runs separately)
+    - if: '$CI_PIPELINE_SOURCE == "schedule"'
+      when: never
+    # Run on git tags
+    - if: "$CI_COMMIT_TAG"
+    # Run on merge requests when Markdown files change
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+      changes:
+        - "**/*.md"
+        - ".markdownlint.json"
+        - ".markdownlintignore"
+        - "scripts/ci/lint_markdown.py"
+    # Run on main branch when Markdown files change
+    - if: '$CI_COMMIT_BRANCH == "main"'
+      changes:
+        - "**/*.md"
+        - ".markdownlint.json"
+        - ".markdownlintignore"
+        - "scripts/ci/lint_markdown.py"
+
+# ==============================================================================
+# Build Images Stage - Service Images
+# ==============================================================================
+# Build service images (Pi-hole, Unbound) after lint passes to ensure
+# we don't waste time building if there are syntax errors
+
+# Build custom Pi-hole Docker image with configuration
+build-pihole-image:
+  extends: .build-image-gitlab
+  stage: build-images # Runs after lint
+  needs:
+    - job: lint:shellcheck
+      optional: true
+    - job: lint:yaml
+      optional: true
+    - job: lint:markdown
+      optional: true
+  variables:
+    IMAGE_NAME: $CI_REGISTRY_IMAGE/pihole
+    BUILD_CONTEXT: docker/pihole
+    VERSION_REGEX: "FROM pihole\/pihole:"
+  rules:
+    # Exclude scheduled pipelines (Renovate runs separately)
+    - if: '$CI_PIPELINE_SOURCE == "schedule"'
+      when: never
+    # Run on Renovate MRs that update Pi-hole base image
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_SOURCE_BRANCH_NAME =~ /^renovate\//'
+      changes:
+        - docker/pihole/**/*
+    # Run on main branch when Pi-hole files change
+    - if: $CI_COMMIT_BRANCH == "main"
+      changes:
+        - docker/pihole/**/*
+    # Run on manual trigger via web UI
+    - if: $CI_PIPELINE_SOURCE == "web"
+
+# Build custom Unbound DNS resolver image
+build-unbound-image:
+  extends: .build-image-gitlab
+  stage: build-images # Runs after lint
+  needs:
+    - job: lint:shellcheck
+      optional: true
+    - job: lint:yaml
+      optional: true
+    - job: lint:markdown
+      optional: true
+  variables:
+    IMAGE_NAME: $CI_REGISTRY_IMAGE/unbound
+    BUILD_CONTEXT: docker/unbound
+    VERSION_REGEX: "ARG UNBOUND_VERSION="
+  rules:
+    # Exclude scheduled pipelines (Renovate runs separately)
+    - if: '$CI_PIPELINE_SOURCE == "schedule"'
+      when: never
+    # Run on Renovate MRs that update Unbound/OpenSSL/Debian versions
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_SOURCE_BRANCH_NAME =~ /^renovate\//'
+      changes:
+        - docker/unbound/**/*
+    # Run on main branch when Unbound files change
+    - if: $CI_COMMIT_BRANCH == "main"
+      changes:
+        - docker/unbound/**/*
+    # Run on manual trigger via web UI
+    - if: $CI_PIPELINE_SOURCE == "web"
+
+# ==============================================================================
+# Generate Stage - Dynamic Child Pipeline
+# ==============================================================================
+# Generate dynamic child pipeline for changed services
+
+generate:child-pipeline:
+  extends: .base-job
+  stage: generate
+  needs:
+    - job: build:ci-image
+      optional: true
+    - job: build-pihole-image
+      optional: true
+    - job: build-unbound-image
+      optional: true
+  script:
+    - python3 scripts/ci/generate_pipeline.py
+    - echo ""
+    - echo "Generated child pipeline:"
+    - cat child-pipeline.yml
+  artifacts:
+    paths:
+      - child-pipeline.yml
+    expire_in: 1 day
+  rules:
+    # Exclude scheduled pipelines (Renovate runs separately)
+    - if: '$CI_PIPELINE_SOURCE == "schedule"'
+      when: never
+    # Run on git tags (deploy all services)
+    - if: "$CI_COMMIT_TAG"
+    # Run on merge requests when services change
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+      changes:
+        - "services/**/*"
+        - "scripts/ci/**/*"
+        - ".gitlab-ci.yml"
+    # Run on main branch when services change
+    - if: '$CI_COMMIT_BRANCH == "main"'
+      changes:
+        - "services/**/*"
+        - "scripts/ci/**/*"
+        - ".gitlab-ci.yml"
+
+# ==============================================================================
+# Trigger Stage - Child Pipeline Execution
+# ==============================================================================
+# Trigger child pipeline with service-specific deployment jobs
+
+trigger:service-pipeline:
+  stage: trigger
+  trigger:
+    include:
+      - artifact: child-pipeline.yml
+        job: generate:child-pipeline
+    strategy: depend # Parent pipeline fails if child fails
+    forward:
+      pipeline_variables: true # Pass all CI variables to child
+  needs:
+    - job: generate:child-pipeline
+      artifacts: true
+    - job: build-pihole-image
+      optional: true
+    - job: build-unbound-image
+      optional: true
+  rules:
+    # Exclude scheduled pipelines (Renovate runs separately)
+    - if: '$CI_PIPELINE_SOURCE == "schedule"'
+      when: never
+    # Run on git tags (deploy all services)
+    - if: "$CI_COMMIT_TAG"
+    # Run on merge requests when services change
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+      changes:
+        - "services/**/*"
+        - "scripts/ci/**/*"
+        - ".gitlab-ci.yml"
+    # Run on main branch when services change
+    - if: '$CI_COMMIT_BRANCH == "main"'
+      changes:
+        - "services/**/*"
+        - "scripts/ci/**/*"
+        - ".gitlab-ci.yml"
+
+# ==============================================================================
+# Security Stage - Secret Scanning
+# ==============================================================================
+# Scan for hardcoded secrets using Gitleaks with SARIF reports for
+# GitLab Security Dashboard integration
+
+security:scan-secrets:
+  extends: .base-job
+  stage: security
+  needs:
+    - job: build:ci-image
+      optional: true
+  script:
+    - |
+      echo "Scanning for secrets with Gitleaks..."
+      gitleaks detect \
+        --source . \
+        --config .gitleaks.toml \
+        --report-format sarif \
+        --report-path gl-secret-detection-report.json \
+        --verbose \
+        --exit-code 1 || {
+          echo "WARNING: Secrets detected! Review findings above."
+          exit 1
+        }
+  artifacts:
+    reports:
+      # GitLab secret_detection report type for security dashboard integration
+      secret_detection: gl-secret-detection-report.json
+    paths:
+      - gl-secret-detection-report.json
+    expire_in: 1 week
+    when: always
+  rules:
+    # Exclude scheduled pipelines (Renovate runs separately)
+    - if: '$CI_PIPELINE_SOURCE == "schedule"'
+      when: never
+    # Run on git tags for release validation
+    - if: "$CI_COMMIT_TAG"
+    # Run on merge requests when service/Docker files change (secrets often in env vars)
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+      changes:
+        - "services/**/*"
+        - "docker/**/*"
+    # Run on main branch when service/Docker files change
+    - if: '$CI_COMMIT_BRANCH == "main"'
+      changes:
+        - "services/**/*"
+        - "docker/**/*"
+
+# ==============================================================================
+# Publish Stage
+# ==============================================================================
+# Sanitize and publish to GitHub portfolio (maintainer-user/proxmox-infra)
+
+publish:github-portfolio:
+  extends: .base-job
+  stage: publish
+  needs:
+    - job: test:ci-scripts
+      optional: true
+  before_script:
+    # Configure SSH for GitHub
+    - mkdir -p ~/.ssh
+    - chmod 700 ~/.ssh
+    # Copy SSH key from GitLab File variable (variable contains path to temp file)
+    - cp "$GITHUB_SSH_PRIVATE_KEY" ~/.ssh/id_ed25519
+    - chmod 600 ~/.ssh/id_ed25519
+    # Verify key was copied correctly
+    - |
+      if ! grep -q "BEGIN.*PRIVATE KEY" ~/.ssh/id_ed25519; then
+        echo "ERROR: SSH key does not appear to be valid"
+        echo "First line of key file:"
+        head -n 1 ~/.ssh/id_ed25519
+        exit 1
+      fi
+      echo "✅ SSH key loaded successfully"
+    - ssh-keyscan github.com >> ~/.ssh/known_hosts
+    # Configure Git
+    - git config --global user.name "maintainer-user"
+    - git config --global user.email "maintainer-user@users.noreply.github.com"
+  script:
+    - python3 scripts/ci/publish_github.py --remote "$GITHUB_REPO_URL" --verbose
+  rules:
+    # Exclude if commit message contains [skip publish]
+    - if: '$CI_COMMIT_MESSAGE =~ /\[skip publish\]/'
+      when: never
+    # Run on scheduled GitHub sync (daily at 4 AM)
+    - if: '$CI_PIPELINE_SOURCE == "schedule" && $SCHEDULE_TYPE == "github_sync"'
+      when: always
+    # Run on manual trigger via web UI
+    - if: '$CI_PIPELINE_SOURCE == "web"'
+      when: manual
+      allow_failure: true
+  allow_failure: false # Fail pipeline if verification fails or push errors
+  tags:
+    - talos
+  timeout: 15 minutes
+  artifacts:
+    when: on_failure
+    paths:
+      - tools/sanitize/reports/
+    expire_in: 7 days
+
+# ==============================================================================
+# Renovate Stage - Dependency Updates
+# ==============================================================================
+# Automated dependency updates using Renovate Bot
+
+renovate:
+  stage: renovate
+  image: renovate/renovate:${RENOVATE_VERSION}
+  before_script:
+    - echo "GitLab API - $CI_API_V4_URL"
+    - echo "Repository - $CI_PROJECT_PATH"
+  variables:
+    # Node.js configuration
+    NODE_NO_WARNINGS: "1"
+
+    # GitLab platform configuration
+    RENOVATE_PLATFORM: "gitlab"
+    RENOVATE_ENDPOINT: $CI_API_V4_URL
+    RENOVATE_AUTODISCOVER: "false"
+    RENOVATE_REPOSITORIES: '["$CI_PROJECT_ID"]'
+
+    # Behavior configuration
+    RENOVATE_REQUIRE_CONFIG: "optional" # Options: "required", "optional", "ignored"
+    RENOVATE_ONBOARDING: "false"
+
+    # Logging configuration
+    LOG_LEVEL: "info"
+
+    # Authentication tokens
+    # RENOVATE_TOKEN: Inherited from CI/CD variable
+    #   (GitLab PAT or Project Access Token with 'api' scope)
+    #   - Required for creating MRs/issues
+    #   - Without this, Renovate can only read (using CI_JOB_TOKEN)
+    #   - Must be set in: Settings > CI/CD > Variables > Add Variable
+    # GITHUB_COM_TOKEN: Inherited from CI/CD variable
+    #   (for fetching GitHub release data)
+
+    # Performance optimization
+    RENOVATE_REPOSITORY_CACHE: "enabled" # Options: "disabled", "enabled", "reset"
+    RENOVATE_CACHE_DIR: .renovate-cache
+    RENOVATE_PERSIST_REPO_DATA: "true"
+
+    # Cache configuration
+    RENOVATE_CACHE_PRIVATE_PACKAGES: "true"
+
+    # Dry run mode
+    RENOVATE_DRY_RUN: "" # Options: "extract", "lookup", "full" or "" (to disable)
+
+    # Prevent GitLab Runner from checking out the code (Renovate handles this)
+    GIT_STRATEGY: none
+  script:
+    - renovate $RENOVATE_EXTRA_FLAGS
+  cache:
+    key: "renovate-cache"
+    paths:
+      - .renovate-cache
+  rules:
+    # Run on scheduled Renovate pipeline
+    - if: '$CI_PIPELINE_SOURCE == "schedule" && $SCHEDULE_TYPE == "renovate"'
+      when: always
+    # Manual trigger via web UI (with debug logging and dry-run)
+    - if: '$CI_PIPELINE_SOURCE == "web"'
+      when: manual
+      allow_failure: true
+      variables:
+        LOG_LEVEL: "debug"
+        RENOVATE_DRY_RUN: "full"
+  tags:
+    - talos
+  retry:
+    max: 2
+    when:
+      - api_failure
+      - runner_system_failure
+      - stuck_or_timeout_failure
+  timeout: 2 hours
+  allow_failure: true

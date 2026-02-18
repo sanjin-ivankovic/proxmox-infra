@@ -1,0 +1,94 @@
+---
+# ============================================================================
+# Rolling Reboot of Talos Cluster
+# ============================================================================
+# Performs a rolling reboot of all Talos nodes via the API.
+#
+# Usage:
+#   cd /home/user/projects/proxmox-infra/ansible/talos
+#   make reboot
+# ============================================================================
+
+- name: Rolling reboot Talos cluster
+  hosts: talos
+  gather_facts: false
+  become: false  # Talos uses API - no privilege escalation needed
+  connection: local
+  serial: 1 # Reboot one node at a time
+
+  tasks:
+    - name: Cordon node before reboot
+      ansible.builtin.command:
+        cmd: >
+          kubectl --kubeconfig {{ talos_kubeconfig_file }} cordon {{ inventory_hostname }}
+      environment:
+        KUBECONFIG: "{{ talos_kubeconfig_file }}"
+      register: cordon_result
+      changed_when: cordon_result.rc == 0
+      failed_when: false
+      delegate_to: localhost
+
+    - name: Drain node workloads
+      ansible.builtin.command:
+        cmd: >
+          kubectl --kubeconfig {{ talos_kubeconfig_file }} drain {{ inventory_hostname }}
+          --ignore-daemonsets
+          --delete-emptydir-data
+          --timeout=300s
+          --force
+      environment:
+        KUBECONFIG: "{{ talos_kubeconfig_file }}"
+      register: drain_result
+      changed_when: drain_result.rc == 0
+      failed_when: false
+      delegate_to: localhost
+    - name: Reboot node via Talos API - {{ inventory_hostname }}
+      ansible.builtin.command:
+        cmd: >
+          talosctl reboot
+          --talosconfig {{ talos_config_file }}
+          --nodes {{ ansible_host }}
+          --endpoints {{ ansible_host }}
+      environment:
+        TALOSCONFIG: "{{ talos_config_file }}"
+      register: reboot_result
+      changed_when: reboot_result.rc == 0
+      delegate_to: localhost
+
+    - name: Wait for node to reboot
+      ansible.builtin.wait_for:
+        host: "{{ ansible_host }}"
+        port: 50000
+        delay: 15
+        timeout: 300
+      delegate_to: localhost
+
+    - name: Verify node health after reboot
+      ansible.builtin.command:
+        cmd: >
+          talosctl health
+          --talosconfig {{ talos_config_file }}
+          --nodes {{ ansible_host }}
+      environment:
+        TALOSCONFIG: "{{ talos_config_file }}"
+      register: health
+      changed_when: false
+      retries: 5
+      delay: 10
+      until: health.rc == 0
+      delegate_to: localhost
+
+    - name: Uncordon node after successful reboot
+      ansible.builtin.command:
+        cmd: >
+          kubectl --kubeconfig {{ talos_kubeconfig_file }} uncordon {{ inventory_hostname }}
+      environment:
+        KUBECONFIG: "{{ talos_kubeconfig_file }}"
+      register: uncordon_result
+      changed_when: uncordon_result.rc == 0
+      delegate_to: localhost
+      when: health.rc == 0
+
+    - name: Display reboot status
+      ansible.builtin.debug:
+        msg: "✓ {{ inventory_hostname }} rebooted and healthy"

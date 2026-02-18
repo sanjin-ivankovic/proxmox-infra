@@ -1,0 +1,8 @@
+---
+# Group Variables - Windows VMs
+# These variables apply to all Windows VMs managed by this project
+
+# User configuration
+user: maintainer
+# System configuration
+# Add your Windows VM-specific variables here

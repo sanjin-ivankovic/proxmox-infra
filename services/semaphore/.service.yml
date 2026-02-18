@@ -1,0 +1,7 @@
+---
+# Semaphore Service Metadata
+# This file is used by the GitLab CI/CD pipeline for automated deployment
+
+# [REQUIRED] Deployment Target
+# Maps to GitLab CI secrets: ENV_SEMAPHORE, HOST_SEMAPHORE, SSH_KEY_SEMAPHORE
+target_host: semaphore

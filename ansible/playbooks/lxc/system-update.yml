@@ -1,0 +1,40 @@
+---
+# playbooks/lxc/system-update.yml
+# Update system packages on all LXC hosts using apt
+
+- name: Update system packages
+  hosts: all
+  become: true
+  gather_facts: true
+  remote_user: maintainer
+  vars:
+    ansible_user: maintainer
+
+  tasks:
+    - name: Update apt cache
+      ansible.builtin.apt:
+        update_cache: true
+        cache_valid_time: 3600
+      tags: [update]
+
+    - name: Upgrade all packages
+      ansible.builtin.apt:
+        upgrade: dist
+        autoremove: true
+        autoclean: true
+      register: apt_upgrade
+      tags: [update]
+
+    - name: Check if reboot is required
+      ansible.builtin.stat:
+        path: /var/run/reboot-required
+      register: reboot_required
+      tags: [update, check_reboot]
+
+    - name: Display update summary
+      ansible.builtin.debug:
+        msg:
+          - '✓ Update complete for {{ inventory_hostname }}'
+          - '  Changed: {{ apt_upgrade.changed }}'
+          - '  Reboot required: {{ reboot_required.stat.exists }}'
+      tags: [update]

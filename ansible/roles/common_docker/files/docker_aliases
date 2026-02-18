@@ -1,0 +1,226 @@
+#!/bin/bash
+# Docker-specific bash aliases
+# Deployed by common_docker role
+
+DOCKER_FOLDER=/srv/docker
+
+# DOCKER MANAGEMENT - Container and system-wide operations
+# All Docker commands start with "d"
+
+# Container Management
+alias dps='docker ps -a'                                                           # Show all containers
+alias dpss='docker ps -a --format "table {{.Names}}\t{{.State}}\t{{.Status}}\t{{.Image}}" | (sed -u 1q; sort)' # Formatted container list
+alias dstop='docker stop'                                                          # Stop container(s) - Usage: dstop container_name
+alias dstopall='docker stop $(docker ps -aq)'                                      # Stop ALL running containers
+alias drm='docker rm'                                                              # Remove container(s) - Usage: drm container_name
+alias dexec='docker exec -it'                                                      # Execute into container - Usage: dexec container_name bash
+
+# Logs and Monitoring
+alias dlogs='docker logs -tf --tail="50"'                                          # View container logs - Usage: dlogs container_name
+alias dlogsize='du -ch $(docker inspect --format="{{.LogPath}}" $(docker ps -qa)) 2>/dev/null | sort -h' # Show log file sizes
+alias dips="docker ps -q | xargs -n 1 docker inspect -f '{{.Name}}%tab%{{range .NetworkSettings.Networks}}{{.IPAddress}}%tab%{{end}}' | sed 's#%tab%#\t#g' | sed 's#/##g' | sort | column -t -N NAME,IP\(s\) -o $'\t'" # Show container IPs
+
+# System Information
+alias ddf='docker system df'                                                       # Show docker disk usage
+alias dinfo='docker system info'                                                   # Show docker system info
+
+# Cleanup Operations (use with caution!)
+alias dprunevol='docker volume prune -f'                                           # Remove unused volumes
+alias dprunesys='docker system prune -a -f'                                        # Remove all unused docker data
+alias ddelimages='docker rmi $(docker images -q) 2>/dev/null'                     # Remove ALL images (use carefully!)
+alias dprune='docker system prune -f && docker volume prune -f'                   # Safe cleanup: remove unused data and volumes
+
+# DANGEROUS: Complete docker cleanup (interactive confirmation)
+derase() {
+    echo "⚠️  WARNING: This will remove ALL containers, images, volumes, and unused data!"
+    echo ""
+    read -p "Are you absolutely sure? Type 'YES' to confirm: " -r
+    echo
+    if [[ $REPLY == "YES" ]]; then
+        echo "🗑️  Removing all Docker containers..."
+        # shellcheck disable=SC2046
+        docker stop $(docker ps -aq) 2>/dev/null
+        # shellcheck disable=SC2046
+        docker rm $(docker ps -aq) 2>/dev/null
+        echo "🗑️  Removing all Docker images..."
+        # shellcheck disable=SC2046
+        docker rmi $(docker images -q) 2>/dev/null
+        echo "🗑️  Removing all Docker volumes..."
+        docker volume prune -f
+        echo "🗑️  Running system prune..."
+        docker system prune -a -f
+        echo "✅ Docker completely cleaned!"
+    else
+        echo "❌ Operation cancelled. (Type 'YES' to confirm)"
+        return 1
+    fi
+}
+
+# DOCKER COMPOSE - Auto-detect service directories
+# Works with per-application directory structure: /srv/docker/{app-name}/
+# Each directory contains its own docker-compose.yml
+
+# Helper: Find service directories containing docker-compose.yml
+_get_docker_service_dir() {
+    local service_dir=""
+    local service_dirs=()
+    local dir
+
+    # Find all directories containing docker-compose.yml
+    for dir in "$DOCKER_FOLDER"/*; do
+        if [ -d "$dir" ] && [ -f "$dir/docker-compose.yml" ]; then
+            service_dirs+=("$dir")
+        fi
+    done
+
+    # If multiple services found, prompt user or use first one
+    if [ ${#service_dirs[@]} -eq 0 ]; then
+        echo "❌ Error: No service found in $DOCKER_FOLDER" >&2
+        return 1
+    elif [ ${#service_dirs[@]} -eq 1 ]; then
+        service_dir="${service_dirs[0]}"
+    else
+        # Multiple services - use first one, but warn
+        echo "⚠️  Multiple services found, using: $(basename "${service_dirs[0]}")" >&2
+        service_dir="${service_dirs[0]}"
+    fi
+
+    echo "$service_dir"
+}
+
+# Helper: Get service name for display
+_get_docker_service_name() {
+    local service_dir
+    service_dir=$(_get_docker_service_dir) || return 1
+    basename "$service_dir"
+}
+
+# Docker Compose UP - bring up the service
+dcup() {
+    local service_dir
+    local service_name
+    service_dir=$(_get_docker_service_dir) || return 1
+    service_name=$(basename "$service_dir")
+    echo "🚀 Starting service: $service_name"
+    (cd "$service_dir" && docker compose up -d --build --remove-orphans "$@")
+}
+
+# Docker Compose DOWN - bring down the service
+dcdown() {
+    local service_dir
+    local service_name
+    service_dir=$(_get_docker_service_dir) || return 1
+    service_name=$(basename "$service_dir")
+    echo "🛑 Stopping service: $service_name"
+    (cd "$service_dir" && docker compose down --remove-orphans "$@")
+}
+
+# Docker Compose RESTART - restart the service
+dcrestart() {
+    local service_dir
+    local service_name
+    service_dir=$(_get_docker_service_dir) || return 1
+    service_name=$(basename "$service_dir")
+    echo "🔄 Restarting service: $service_name"
+    (cd "$service_dir" && docker compose restart "$@")
+}
+
+# Docker Compose START - start stopped service
+dcstart() {
+    local service_dir
+    local service_name
+    service_dir=$(_get_docker_service_dir) || return 1
+    service_name=$(basename "$service_dir")
+    echo "▶️  Starting service: $service_name"
+    (cd "$service_dir" && docker compose start "$@")
+}
+
+# Docker Compose STOP - stop service without removing
+dcstop() {
+    local service_dir
+    local service_name
+    service_dir=$(_get_docker_service_dir) || return 1
+    service_name=$(basename "$service_dir")
+    echo "⏸️  Stopping service: $service_name"
+    (cd "$service_dir" && docker compose stop "$@")
+}
+
+# Docker Compose RECREATE - force recreate containers
+dcrec() {
+    local service_dir
+    local service_name
+    service_dir=$(_get_docker_service_dir) || return 1
+    service_name=$(basename "$service_dir")
+    echo "♻️  Recreating service: $service_name"
+    (cd "$service_dir" && docker compose up -d --force-recreate --remove-orphans "$@")
+}
+
+# Docker Compose LOGS - view service logs
+dclogs() {
+    local service_dir
+    local service_name
+    service_dir=$(_get_docker_service_dir) || return 1
+    service_name=$(basename "$service_dir")
+    echo "📋 Logs for service: $service_name"
+    (cd "$service_dir" && docker compose logs -tf --tail="50" "$@")
+}
+
+# Docker Compose PULL - pull new images
+dcpull() {
+    local service_dir
+    local service_name
+    service_dir=$(_get_docker_service_dir) || return 1
+    service_name=$(basename "$service_dir")
+    echo "📥 Pulling images for service: $service_name"
+    (cd "$service_dir" && docker compose pull "$@")
+}
+
+# Docker Compose PS - show containers
+dcps() {
+    local service_dir
+    service_dir=$(_get_docker_service_dir) || return 1
+    (cd "$service_dir" && docker compose ps "$@")
+}
+
+# Docker Compose CONFIG - validate and view config
+dcconfig() {
+    local service_dir
+    service_dir=$(_get_docker_service_dir) || return 1
+    (cd "$service_dir" && docker compose config "$@")
+}
+
+# Docker Compose EXEC - execute command in container
+dcexec() {
+    local service_dir
+    service_dir=$(_get_docker_service_dir) || return 1
+    (cd "$service_dir" && docker compose exec "$@")
+}
+
+# Generic docker compose runner for advanced usage
+dcrun() {
+    local service_dir
+    service_dir=$(_get_docker_service_dir) || return 1
+    (cd "$service_dir" && docker compose "$@")
+}
+
+# Show current service info
+dcinfo() {
+    local service_dir
+    local service_name
+    service_dir=$(_get_docker_service_dir) || return 1
+    service_name=$(basename "$service_dir")
+    echo "📍 Service: $service_name"
+    echo "📁 Location: $service_dir"
+    echo ""
+    if [ -f "$service_dir/docker-compose.yml" ]; then
+        echo "✓ docker-compose.yml found"
+        echo ""
+        (cd "$service_dir" && docker compose ps)
+    else
+        echo "❌ No docker-compose.yml found"
+    fi
+}
+
+# Quick navigation
+alias cds='cd $DOCKER_FOLDER'     # Jump to docker folder
+alias cdservice='cd $(_get_docker_service_dir 2>/dev/null || echo $DOCKER_FOLDER)' # Jump to service directory

@@ -1,0 +1,150 @@
+---
+# Example Service Metadata Template
+# Copy this to services/<your-service>/.service.yml
+
+# Service identification
+name: myservice # Service name (matches directory name)
+description: My awesome service # Brief description
+
+# Deployment target
+# MUST match Ansible inventory hostname
+# This is used to resolve SSH_KEY_<hostname> and HOST_<hostname> secrets
+target_host: myhost
+
+# Container configuration
+# Docker container name (optional, defaults to service name)
+container_name: myservice
+
+# Deployment settings
+auto_deploy: true # Enable automatic deployment on git push
+# Options: "rolling" (zero-downtime) or "recreate" (with downtime)
+deployment_strategy: rolling
+health_check_timeout: 60 # Seconds to wait for health check
+
+# Tags for organization (optional)
+tags:
+  - web
+  - production
+
+# Service URLs (optional, for documentation)
+urls:
+  web_ui: "http://${TARGET_HOST}:8080" # Web interface
+  api: "http://${TARGET_HOST}:8080/api" # API endpoint
+  docs: "http://${TARGET_HOST}:8080/docs" # Documentation
+
+# Health check configuration (highly recommended)
+health_check:
+  # HTTP endpoint to check (e.g., /health, /api/ping)
+  endpoint: /health
+  port: 8080 # Port where service listens
+  expected_status: 200 # Expected HTTP status code (default: 200)
+  timeout: 10 # Timeout in seconds (optional)
+
+# Resource requirements (optional, for documentation)
+resources:
+  cpu: "1" # CPU cores
+  memory: "1GB" # RAM
+  disk: "5GB" # Disk space
+
+# Environment-specific configuration (optional)
+environment:
+  production: true
+  log_level: "info"
+
+# Dependencies (optional, for documentation)
+dependencies:
+  - postgres # This service depends on postgres
+  - redis
+
+# Notes and additional information (optional)
+notes: |
+  This is an example service configuration.
+
+  Key points:
+  - target_host MUST match your Ansible inventory hostname
+  - Ensure secrets SSH_KEY_<target_host> and HOST_<target_host> are configured
+  - Health check endpoint should return expected_status when service is healthy
+  - deployment_strategy "rolling" is preferred for zero-downtime updates
+
+# ============================================================================
+# REQUIRED FIELDS (minimum viable configuration)
+# ============================================================================
+#
+# name: myservice
+# target_host: myhost
+#
+# ============================================================================
+
+# ============================================================================
+# DEPLOYMENT STRATEGIES
+# ============================================================================
+#
+# ROLLING (recommended):
+#   - Zero downtime
+#   - Pull new images → Update containers in place
+#   - Best for stateless services
+#   - Rollback is automatic if health check fails
+#
+# RECREATE:
+#   - Brief downtime
+#   - Stop containers → Pull images → Start new containers
+#   - Best for stateful services or major version updates
+#   - Ensures clean state
+#
+# ============================================================================
+
+# ============================================================================
+# HEALTH CHECK EXAMPLES
+# ============================================================================
+#
+# Simple HTTP endpoint:
+#   health_check:
+#     endpoint: /health
+#     port: 8080
+#     expected_status: 200
+#
+# API endpoint:
+#   health_check:
+#     endpoint: /api/v1/ping
+#     port: 3000
+#     expected_status: 200
+#
+# Custom port:
+#   health_check:
+#     endpoint: /
+#     port: 9090
+#     expected_status: 200
+#
+# No health check (not recommended):
+#   # Simply omit the health_check section
+#
+# ============================================================================
+
+# ============================================================================
+# COMPLETE WORKFLOW
+# ============================================================================
+#
+# 1. Create service directory:
+#    mkdir -p services/myservice
+#
+# 2. Copy this template:
+#    cp services/_templates/service-example.yaml services/myservice/.service.yml
+#
+# 3. Edit configuration:
+#    vim services/myservice/.service.yml
+#
+# 4. Create docker-compose.yml:
+#    vim services/myservice/docker-compose.yml
+#
+# 5. Configure GitLab CI/CD variables:
+#    - SSH_KEY_myhost (SSH private key)
+#    - HOST_myhost (IP address)
+#
+# 6. Commit and push:
+#    git add services/myservice/
+#    git commit -m "Add myservice"
+#    git push origin main
+#
+# 7. Pipeline automatically deploys your service! 🚀
+#
+# ============================================================================

@@ -1,0 +1,37 @@
+---
+# ============================================================================
+# Talos Machine Config Patch - Control Plane
+# ============================================================================
+# This patch is applied only to control plane nodes.
+#
+# Usage: Applied automatically during config generation via
+#        talosctl gen config --config-patch-control-plane @patches/controlplane.yaml
+# ============================================================================
+
+machine:
+  network:
+    interfaces:
+      - interface: ens18
+        vip:
+          ip: "10.40.0.40"
+
+cluster:
+  # Control Plane-specific etcd configuration
+  etcd:
+    # Advertise metrics for monitoring
+    extraArgs:
+      listen-metrics-urls: http://0.0.0.0:2381
+
+  # API Server configuration
+  apiServer:
+    # Enable audit logging
+    extraArgs:
+      audit-log-path: /var/log/audit/kube/audit.log
+      audit-log-maxage: "30"
+      audit-log-maxbackup: "10"
+      audit-log-maxsize: "100"
+
+    # Additional SANs for the API server certificate
+    certSANs:
+      - 10.40.0.40
+      - talos-vip.example.com

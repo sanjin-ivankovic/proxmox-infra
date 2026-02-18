@@ -1,0 +1,199 @@
+---
+# ============================================================================
+# Talos Cluster - Main Playbook (Orchestrator)
+# ============================================================================
+# This playbook imports all individual Talos playbooks and allows running
+# them with tags for flexible workflow management.
+#
+# Prerequisites:
+#   - talosctl installed
+#   - Proxmox VMs created via Terraform
+#   - Inventory generated from Terraform
+#
+# Usage Examples:
+#
+#   # Full deployment workflow
+#   ansible-playbook -i ../../talos/inventory/hosts.yml main.yml --tags deployment
+#
+#   # Individual operations
+#   ansible-playbook -i ../../talos/inventory/hosts.yml main.yml --tags generate-configs
+#   ansible-playbook -i ../../talos/inventory/hosts.yml main.yml --tags apply-configs
+#   ansible-playbook -i ../../talos/inventory/hosts.yml main.yml --tags bootstrap
+#   ansible-playbook -i ../../talos/inventory/hosts.yml main.yml --tags verify
+#
+#   # Operational tasks
+#   ansible-playbook -i ../../talos/inventory/hosts.yml main.yml --tags diagnostics
+#   ansible-playbook -i ../../talos/inventory/hosts.yml main.yml --tags upgrade -e "talos_version=v1.13.0"
+#   ansible-playbook -i ../../talos/inventory/hosts.yml main.yml --tags reboot
+#   ansible-playbook -i ../../talos/inventory/hosts.yml main.yml --tags health-check
+#
+#   # Multiple operations
+#   ansible-playbook -i ../../talos/inventory/hosts.yml main.yml --tags "generate-configs,apply-configs,bootstrap"
+#
+#   # Lifecycle operations
+#   ansible-playbook -i ../../talos/inventory/hosts.yml main.yml --tags shutdown
+#   ansible-playbook -i ../../talos/inventory/hosts.yml main.yml --tags startup
+#   ansible-playbook -i ../../talos/inventory/hosts.yml main.yml --tags reset
+#
+#   # List all available tags
+#   ansible-playbook -i ../../talos/inventory/hosts.yml main.yml --list-tags
+#
+# Tag Groups:
+#   deployment      - Complete deployment workflow (generate, apply, bootstrap, verify)
+#   operations      - Operational tasks (diagnostics, upgrade, health-check)
+#   lifecycle       - VM lifecycle (reboot, shutdown, startup, reset)
+#   all             - Everything (use with caution)
+#
+# Tag Reference:
+#   generate-configs  - Generate Talos machine configs (01)
+#   apply-configs     - Apply configs to nodes (02)
+#   bootstrap         - Bootstrap Kubernetes cluster (03)
+#   apply-rbac        - Apply RBAC patches (04)
+#   configure-tiers   - Configure production workload tiers (05)
+#   verify            - Verify cluster health (06)
+#   diagnostics       - Collect diagnostics (07)
+#   upgrade           - Upgrade Talos OS (08) - requires -e "talos_version=vX.Y.Z"
+#   reboot            - Rolling reboot (09)
+#   shutdown          - Graceful shutdown (10)
+#   startup           - Start VMs (11)
+#   health-check      - Comprehensive health check (12)
+#   reset             - DESTRUCTIVE: Reset cluster to maintenance mode (13)
+# ============================================================================
+
+# ==============================================================================
+# 01: Generate Talos Machine Configurations
+# ==============================================================================
+
+- name: Import 01-generate-configs playbook
+  ansible.builtin.import_playbook: 01-generate-configs.yml
+  tags:
+    - generate-configs
+    - deployment
+    - never # Don't run in 'all' to prevent accidental regeneration
+
+# ==============================================================================
+# 02: Apply Talos Configurations to Nodes
+# ==============================================================================
+
+- name: Import 02-apply-configs playbook
+  ansible.builtin.import_playbook: 02-apply-configs.yml
+  tags:
+    - apply-configs
+    - deployment
+
+# ==============================================================================
+# 03: Bootstrap Talos Kubernetes Cluster
+# ==============================================================================
+
+- name: Import 03-bootstrap playbook
+  ansible.builtin.import_playbook: 03-bootstrap.yml
+  tags:
+    - bootstrap
+    - deployment
+
+# ==============================================================================
+# 04: Apply RBAC Patches
+# ==============================================================================
+
+- name: Import 04-apply-rbac playbook
+  ansible.builtin.import_playbook: 04-apply-rbac.yml
+  tags:
+    - apply-rbac
+    - deployment
+
+# ==============================================================================
+# 05: Configure Production Workload Tiers
+# ==============================================================================
+
+- name: Import 05-configure-workload-tiers playbook
+  ansible.builtin.import_playbook: 05-configure-workload-tiers.yml
+  tags:
+    - configure-tiers
+    - deployment
+
+# ==============================================================================
+# 06: Verify Talos Cluster Health
+# ==============================================================================
+
+- name: Import 06-verify playbook
+  ansible.builtin.import_playbook: 06-verify.yml
+  tags:
+    - verify
+    - deployment
+    - operations
+
+# ==============================================================================
+# 07: Collect Talos Cluster Diagnostics
+# ==============================================================================
+
+- name: Import 07-diagnostics playbook
+  ansible.builtin.import_playbook: 07-diagnostics.yml
+  tags:
+    - diagnostics
+    - operations
+
+# ==============================================================================
+# 08: Upgrade Talos OS Version
+# ==============================================================================
+# Requires: -e "talos_version=v1.13.0"
+
+- name: Import 08-upgrade playbook
+  ansible.builtin.import_playbook: 08-upgrade.yml
+  tags:
+    - upgrade
+    - operations
+    - never # Require explicit tag to prevent accidents
+
+# ==============================================================================
+# 09: Rolling Reboot
+# ==============================================================================
+
+- name: Import 09-reboot playbook
+  ansible.builtin.import_playbook: 09-reboot.yml
+  tags:
+    - reboot
+    - operations
+    - lifecycle
+    - never # Require explicit tag
+
+# ==============================================================================
+# 10: Graceful Shutdown
+# ==============================================================================
+
+- name: Import 10-shutdown playbook
+  ansible.builtin.import_playbook: 10-shutdown.yml
+  tags:
+    - shutdown
+    - lifecycle
+    - never # Require explicit tag
+
+# ==============================================================================
+# 11: Startup After Shutdown
+# ==============================================================================
+
+- name: Import 11-startup playbook
+  ansible.builtin.import_playbook: 11-startup.yml
+  tags:
+    - startup
+    - lifecycle
+
+# ==============================================================================
+# 12: Comprehensive Health Check
+# ==============================================================================
+
+- name: Import 12-health-check playbook
+  ansible.builtin.import_playbook: 12-health-check.yml
+  tags:
+    - health-check
+    - operations
+
+# ==============================================================================
+# 13: Reset Cluster (DESTRUCTIVE)
+# ==============================================================================
+
+- name: Import 13-reset playbook
+  ansible.builtin.import_playbook: 13-reset.yml
+  tags:
+    - reset
+    - lifecycle
+    - never # Require explicit tag and confirmation

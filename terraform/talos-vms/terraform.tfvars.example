@@ -1,0 +1,48 @@
+# ============================================================================
+# Talos VMs - Terraform Variables Example
+# ============================================================================
+# Copy this file to terraform.tfvars.secret and fill in your credentials.
+# The .gitignore file will prevent terraform.tfvars.secret from being committed.
+#
+# Usage:
+#   cp terraform.tfvars.example terraform.tfvars.secret
+#   nano terraform.tfvars.secret
+#   # Fill in your credentials
+# ============================================================================
+
+# ============================================================================
+# Proxmox Connection
+# ============================================================================
+
+proxmox_api_url    = "https://10.10.0.4:8006/api2/json"
+proxmox_api_token_id     = "terraform@pam!terraform"
+proxmox_api_token_secret = "your-api-token-here"
+
+# ============================================================================
+# GitLab Backend Authentication
+# ============================================================================
+# This token is used by Makefile to authenticate with GitLab HTTP backend.
+# It's not used by Terraform configuration itself.
+
+gitlab_api_token = "your-gitlab-token-here"
+
+# ============================================================================
+# Infrastructure Defaults
+# ============================================================================
+
+target_node     = "pve"
+default_storage = "local-zfs"
+default_bridge  = "vmbr0"
+
+# ============================================================================
+# Talos-Specific Configuration
+# ============================================================================
+
+talos_iso_storage = "local"
+talos_iso_file    = "talos-amd64.iso"
+
+# ============================================================================
+# VM Instances
+# ============================================================================
+# VM instances are defined in instances/talos.auto.tfvars
+# Edit that file to add/modify/remove Talos VMs

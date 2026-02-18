@@ -1,0 +1,11 @@
+---
+# cloud-config
+# Install and enable QEMU Guest Agent on first boot
+# This allows Proxmox to report VM IP addresses and enables graceful shutdown
+
+packages:
+  - qemu-guest-agent
+
+runcmd:
+  - systemctl enable qemu-guest-agent
+  - systemctl start qemu-guest-agent

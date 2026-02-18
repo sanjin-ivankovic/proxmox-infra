@@ -1,0 +1,176 @@
+---
+# ============================================================================
+# Apply RBAC Patches to Talos Kubernetes Cluster
+# ============================================================================
+# This playbook applies RBAC patches required for proper Talos cluster operation.
+#
+# Patches Applied:
+#   - system:node-reader: Allows nodes to list/watch other nodes
+#     (Fixes: "User system:node:talos-xxx cannot list resource nodes")
+#
+# Prerequisites:
+#   - Cluster bootstrapped (03-bootstrap.yml)
+#   - kubectl installed
+#   - Valid kubeconfig
+#
+# Usage:
+#   cd /home/user/projects/proxmox-infra/ansible/talos
+#   make apply-rbac
+#   OR
+#   ansible-playbook -i inventory/hosts.yml ../playbooks/talos/04-apply-rbac.yml
+# ============================================================================
+
+- name: Apply RBAC patches to Talos cluster
+  hosts: localhost
+  gather_facts: false
+  become: false  # Talos uses API - no privilege escalation needed
+
+  vars:
+    rbac_manifests_dir: "{{ playbook_dir }}/../../talos/manifests/rbac"
+
+  tasks:
+    - name: Check prerequisites
+      block:
+        - name: Verify kubectl is installed
+          ansible.builtin.command:
+            cmd: kubectl version --client --output=json
+          register: kubectl_check
+          changed_when: false
+          failed_when: kubectl_check.rc != 0
+
+        - name: Verify kubeconfig exists
+          ansible.builtin.stat:
+            path: "{{ talos_kubeconfig_file }}"
+          register: kubeconfig_stat
+          failed_when: not kubeconfig_stat.stat.exists
+
+        - name: Test cluster connectivity
+          ansible.builtin.command:
+            cmd: kubectl --kubeconfig {{ talos_kubeconfig_file }} cluster-info
+          environment:
+            KUBECONFIG: "{{ talos_kubeconfig_file }}"
+          register: cluster_info
+          changed_when: false
+          failed_when: cluster_info.rc != 0
+
+    - name: Display RBAC patch information
+      ansible.builtin.debug:
+        msg: |
+          ============================================================================
+          Applying RBAC Patches to Talos Cluster
+          ============================================================================
+
+          Kubeconfig: {{ talos_kubeconfig_file }}
+          Manifests: {{ rbac_manifests_dir }}
+
+          Patches to apply:
+          - system:node-reader (node-reader.yaml)
+            └─ Allows nodes to list/watch other nodes
+            └─ Fixes kubelet permission errors
+
+          ============================================================================
+
+    - name: Check if RBAC manifests directory exists
+      ansible.builtin.stat:
+        path: "{{ rbac_manifests_dir }}"
+      register: rbac_dir_stat
+
+    - name: Fail if RBAC manifests not found
+      ansible.builtin.fail:
+        msg: "RBAC manifests directory not found: {{ rbac_manifests_dir }}"
+      when: not rbac_dir_stat.stat.exists
+
+    - name: Apply node-reader RBAC patch
+      block:
+        - name: Check if system:node-reader already exists
+          ansible.builtin.command:
+            cmd: >
+              kubectl --kubeconfig {{ talos_kubeconfig_file }}
+              get clusterrolebinding system:node-reader
+          environment:
+            KUBECONFIG: "{{ talos_kubeconfig_file }}"
+          register: node_reader_check
+          changed_when: false
+          failed_when: false
+
+        - name: Apply system:node-reader RBAC
+          ansible.builtin.command:
+            cmd: >
+              kubectl --kubeconfig {{ talos_kubeconfig_file }}
+              apply -f {{ rbac_manifests_dir }}/node-reader.yaml
+          environment:
+            KUBECONFIG: "{{ talos_kubeconfig_file }}"
+          register: apply_node_reader
+          changed_when: "'created' in apply_node_reader.stdout or 'configured' in apply_node_reader.stdout"
+
+        - name: Display application result
+          ansible.builtin.debug:
+            msg: |
+              {% if node_reader_check.rc == 0 %}
+              ℹ️  system:node-reader already exists - updated/configured
+              {% else %}
+              ✓ system:node-reader created successfully
+              {% endif %}
+
+              {{ apply_node_reader.stdout }}
+
+    - name: Verify RBAC patches
+      block:
+        - name: Get ClusterRole
+          ansible.builtin.command:
+            cmd: >
+              kubectl --kubeconfig {{ talos_kubeconfig_file }}
+              get clusterrole system:node-reader -o yaml
+          environment:
+            KUBECONFIG: "{{ talos_kubeconfig_file }}"
+          register: clusterrole_output
+          changed_when: false
+
+        - name: Get ClusterRoleBinding
+          ansible.builtin.command:
+            cmd: >
+              kubectl --kubeconfig {{ talos_kubeconfig_file }}
+              get clusterrolebinding system:node-reader -o yaml
+          environment:
+            KUBECONFIG: "{{ talos_kubeconfig_file }}"
+          register: clusterrolebinding_output
+          changed_when: false
+
+        - name: Display verification results
+          ansible.builtin.debug:
+            msg: |
+              ============================================================================
+              ✓ RBAC Patches Applied Successfully
+              ============================================================================
+
+              ClusterRole: system:node-reader
+              {% for line in clusterrole_output.stdout_lines %}
+              {{ line }}
+              {% endfor %}
+
+              ClusterRoleBinding: system:node-reader
+              {% for line in clusterrolebinding_output.stdout_lines %}
+              {{ line }}
+              {% endfor %}
+
+    - name: Summary
+      ansible.builtin.debug:
+        msg: |
+          ============================================================================
+          ✓ RBAC Patches Applied!
+          ============================================================================
+
+          Applied patches:
+          ✓ system:node-reader (ClusterRole + ClusterRoleBinding)
+
+          Next steps:
+          1. Monitor kubelet logs for reduced errors:
+             kubectl logs -n kube-system -l component=kubelet --tail=50
+
+          2. The "cannot list nodes" errors should stop appearing
+
+          3. Continue with cluster setup:
+             make verify    # Verify all nodes
+             make health-check  # Check cluster health
+
+          ============================================================================

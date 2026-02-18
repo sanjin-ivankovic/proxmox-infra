@@ -1,0 +1,5 @@
+---
+# ansible/roles/common_docker/meta/main.yml
+
+dependencies:
+  - role: common_system

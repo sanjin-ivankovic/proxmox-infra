@@ -1,0 +1,6 @@
+---
+# ansible/roles/common_system/handlers/main.yml
+
+- name: Set ping capability
+  ansible.builtin.command: setcap cap_net_raw+p /bin/ping
+  changed_when: true

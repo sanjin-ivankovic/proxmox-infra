@@ -1,0 +1,109 @@
+---
+# ============================================================================
+# Talos Cluster - Global Variables
+# ============================================================================
+
+# ==============================================================================
+# Cluster Information
+# ==============================================================================
+
+cluster_name: "example"
+cluster_domain: "example.com"
+
+# ==============================================================================
+# Talos Versions
+# ==============================================================================
+
+talos_version: "v1.12.4"
+kubernetes_version: "v1.34.3"
+
+# Custom Talos installer with extensions (from Image Factory)
+# Schematic: dc7b152cb3ea99b821fcb7340ce7168313ce393d663740b791c36f6e95fc8586
+# Includes: siderolabs/qemu-guest-agent for Proxmox integration
+talos_installer_image: "factory.talos.dev/installer/dc7b152cb3ea99b821fcb7340ce7168313ce393d663740b791c36f6e95fc8586:v1.12.4"
+
+# ==============================================================================
+# Network Configuration
+# ==============================================================================
+
+# Control plane endpoint (Layer 2 VIP for HA)
+# VIP is configured via machine patches and announced from one CP at a time
+talos_control_plane_endpoint: "https://10.40.0.40:6443"
+talos_vip_address: "10.40.0.40"
+
+# Network CIDR ranges
+pod_network_cidr: "10.244.0.0/16"
+service_network_cidr: "10.96.0.0/12"
+
+# DNS Configuration
+# Nameservers used by Talos nodes (homelab DNS servers)
+talos_nameservers:
+  - "10.10.0.12"
+  - "10.10.0.13"
+
+# Time Configuration
+# NTP servers used by Talos nodes
+talos_time_servers:
+  - "time.cloudflare.com"
+
+# ==============================================================================
+# Machine Configuration
+# ==============================================================================
+
+# Install disk for Talos OS
+talos_install_disk: "/dev/sda"
+
+# ==============================================================================
+# Proxmox Configuration (for VM lifecycle operations)
+# ==============================================================================
+
+proxmox_api_host: "pve.example.com"
+proxmox_api_port: 8006
+proxmox_node: "pve"
+# Credentials are stored in vault.yml:
+# proxmox_api_user: "automation@pve"
+# proxmox_api_token_id: "talos-automation"
+# proxmox_api_token_secret: "<secret>"
+
+# ==============================================================================
+# Infrastructure Components (Deployed via ArgoCD GitOps)
+# ==============================================================================
+# These components are deployed via ArgoCD from the argo-apps repository.
+# Variables here are for documentation/reference only.
+#
+# Deployment method: GitOps via ArgoCD
+# Repository: ssh://git@gitlab.example.com:2424/homelab/argo-apps.git
+# Location: argo-apps/infrastructure/
+#
+# To deploy infrastructure:
+#   1. Bootstrap Talos cluster (ansible)
+#   2. Deploy ArgoCD via bootstrap manifest
+#   3. ArgoCD syncs infrastructure from argo-apps repo
+# ==============================================================================
+
+# ArgoCD Configuration (Bootstrap Application)
+argocd_git_repo: "ssh://git@gitlab.example.com:2424/homelab/argo-apps.git"
+argocd_bootstrap_manifest: "https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml"
+
+# Infrastructure Components Reference (Deployed via GitOps)
+# These are NOT deployed by Ansible - they're managed by ArgoCD
+infrastructure_components:
+  longhorn:
+    version: "v1.7.2"
+    deployed_via: "argo-apps/infrastructure/longhorn/"
+    description: "Distributed block storage for Kubernetes"
+
+  traefik:
+    version: "v3.3.5"
+    deployed_via: "argo-apps/infrastructure/traefik/"
+    description: "Kubernetes Ingress Controller"
+
+  cert_manager:
+    version: "v1.16.2"
+    deployed_via: "argo-apps/infrastructure/cert-manager/"
+    description: "TLS certificate management"
+
+  metallb:
+    version: "v0.14.9"
+    deployed_via: "argo-apps/infrastructure/metallb/"
+    description: "Bare metal load balancer"

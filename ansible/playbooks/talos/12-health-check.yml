@@ -1,0 +1,74 @@
+---
+# ============================================================================
+# Comprehensive Talos Cluster Health Check
+# ============================================================================
+# Runs detailed health checks on all cluster components.
+#
+# Usage:
+#   cd /home/user/projects/proxmox-infra/ansible/talos
+#   make health-check
+# ============================================================================
+
+- name: Comprehensive health check
+  hosts: localhost
+  gather_facts: false
+  become: false  # Talos uses API - no privilege escalation needed
+
+  tasks:
+    - name: Check Talos health on all nodes
+      ansible.builtin.command:
+        cmd: >
+          talosctl health
+          --talosconfig {{ talos_config_file }}
+          --nodes {{ hostvars[item].ansible_host }}
+      environment:
+        TALOSCONFIG: "{{ talos_config_file }}"
+      register: talos_health
+      changed_when: false
+      failed_when: false
+      loop: "{{ groups['talos'] }}"
+
+    - name: Get Kubernetes nodes
+      ansible.builtin.command:
+        cmd: kubectl --kubeconfig {{ talos_kubeconfig_file }} get nodes
+      environment:
+        KUBECONFIG: "{{ talos_kubeconfig_file }}"
+      register: k8s_nodes
+      changed_when: false
+      failed_when: false
+
+    - name: Get Kubernetes API readiness
+      ansible.builtin.command:
+        cmd: kubectl --kubeconfig {{ talos_kubeconfig_file }} get --raw='/readyz?verbose'
+      environment:
+        KUBECONFIG: "{{ talos_kubeconfig_file }}"
+      register: k8s_readyz
+      changed_when: false
+      failed_when: false
+
+    - name: Get all pods status
+      ansible.builtin.command:
+        cmd: kubectl --kubeconfig {{ talos_kubeconfig_file }} get pods -A
+      environment:
+        KUBECONFIG: "{{ talos_kubeconfig_file }}"
+      register: pods_status
+      changed_when: false
+      failed_when: false
+
+    - name: Display health summary
+      ansible.builtin.debug:
+        msg: |
+          ============================================================================
+          Talos Cluster Health Summary
+          ============================================================================
+
+          Kubernetes Nodes:
+          {{ k8s_nodes.stdout if k8s_nodes.rc == 0 else 'Failed to retrieve' }}
+
+          API Readiness:
+          {{ k8s_readyz.stdout if k8s_readyz.rc == 0 else 'Failed to retrieve' }}
+
+          Pods Status:
+          {{ pods_status.stdout if pods_status.rc == 0 else 'Failed to retrieve' }}
+
+          ============================================================================

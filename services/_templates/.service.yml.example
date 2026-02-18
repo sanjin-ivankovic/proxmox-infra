@@ -1,0 +1,17 @@
+---
+# Service Configuration
+# This file defines deployment targets and metadata for the service.
+
+# [REQUIRED] Deployment Target
+# Maps to GitLab CI secrets: HOST_<TARGET_HOST_UPPERCASE>, SSH_KEY_<TARGET_HOST_UPPERCASE>
+target_host: infra-01
+
+# [OPTIONAL] Service Metadata
+# Useful for documentation and future automation (e.g., dashboard generation)
+description: "Primary DNS Server"
+maintainer: "platform-team@example.com"
+
+# [OPTIONAL] Documentation & Links
+links:
+  runbook: "https://wiki.example.com/runbooks/dns"
+  monitoring: "https://grafana.example.com/d/dns-overview"

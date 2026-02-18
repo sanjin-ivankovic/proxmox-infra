@@ -1,0 +1,52 @@
+---
+# Paperless-NGX Document Management System
+# Open-source document management system for digitizing and organizing documents
+#
+# Deployment: Auto-deployed via GitLab CI/CD on push to main
+# Web UI: http://<host-ip>:8080
+
+services:
+  broker:
+    image: docker.io/library/redis:8.6.0@sha256:7b6fb55d8b0adcd77269dc52b3cfffe5f59ca5d43dec3c90dbe18aacce7942e1
+    restart: unless-stopped
+    volumes:
+      - ${APPDATA_DIR}/redis/data:/data
+  db:
+    image: docker.io/library/postgres:18.1@sha256:1090bc3a8ccfb0b55f78a494d76f8d603434f7e4553543d6e807bc7bd6bbd17f
+    restart: unless-stopped
+    volumes:
+      - ${APPDATA_DIR}/postgres/data:/var/lib/postgresql
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+  webserver:
+    image: ghcr.io/paperless-ngx/paperless-ngx:2.20.3@sha256:57ad9565bff3bdf2378ab1dcc21ea649dfd68ee58e0eeca2bfba0120a26563e8
+    restart: unless-stopped
+    depends_on:
+      - db
+      - broker
+    ports:
+      - '8080:8000'
+    volumes:
+      - ${APPDATA_DIR}/paperless-ngx/data:/usr/src/paperless/data
+      - ${APPDATA_DIR}/paperless-ngx/media:/usr/src/paperless/media
+      - ${APPDATA_DIR}/paperless-ngx/export:/usr/src/paperless/export
+      - ${APPDATA_DIR}/paperless-ngx/consume:/usr/src/paperless/consume
+    environment:
+      USERMAP_UID: ${USERMAP_UID}
+      USERMAP_GID: ${USERMAP_GID}
+      PAPERLESS_REDIS: redis://broker:6379
+      PAPERLESS_DBHOST: db
+      PAPERLESS_DBENGINE: postgresql
+      PAPERLESS_DBNAME: ${POSTGRES_DB}
+      PAPERLESS_DBUSER: ${POSTGRES_USER}
+      PAPERLESS_DBPASS: ${POSTGRES_PASSWORD}
+      PAPERLESS_URL: ${PAPERLESS_URL}
+      PAPERLESS_SECRET_KEY: ${PAPERLESS_SECRET_KEY}
+      PAPERLESS_TIME_ZONE: ${PAPERLESS_TIME_ZONE}
+      PAPERLESS_OCR_LANGUAGE: ${PAPERLESS_OCR_LANGUAGE}
+      PAPERLESS_OCR_LANGUAGES: ${PAPERLESS_OCR_LANGUAGES}
+      PAPERLESS_ADMIN_USER: ${PAPERLESS_ADMIN_USER}
+      PAPERLESS_ADMIN_MAIL: ${PAPERLESS_ADMIN_MAIL}
+      PAPERLESS_ADMIN_PASSWORD: ${PAPERLESS_ADMIN_PASSWORD}

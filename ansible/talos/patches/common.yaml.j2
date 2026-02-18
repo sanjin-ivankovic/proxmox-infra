@@ -1,0 +1,65 @@
+---
+# ============================================================================
+# Talos Machine Config Patch - Common (Applied to All Nodes)
+# ============================================================================
+# This patch is applied to both control plane and worker nodes.
+#
+# Usage: Applied automatically during config generation via
+#        talosctl gen config --config-patch @patches/common.yaml
+# ============================================================================
+
+machine:
+  # Network configuration
+  network:
+    # DNS nameservers
+    nameservers:
+{% for nameserver in talos_nameservers %}
+      - {{ nameserver }}
+{% endfor %}
+
+  # Install configuration
+  install:
+    disk: {{ talos_install_disk }}
+    image: {{ talos_installer_image }}
+    wipe: false
+
+  # Kernel parameters
+  kernel:
+    modules:
+      # Required for Longhorn distributed storage
+      - name: iscsi_tcp
+      - name: nvme_tcp
+
+  # Sysctls for Kubernetes optimization
+  sysctls:
+    # Increase inotify limits for large clusters
+    fs.inotify.max_user_watches: "1048576"
+    fs.inotify.max_user_instances: "8192"
+
+  # Time configuration
+  time:
+    servers:
+{% for server in talos_time_servers %}
+      - {{ server }}
+{% endfor %}
+
+  # Features
+  features:
+    # Enable KubePrism for reliable localhost Kubernetes API access
+    kubePrism:
+      enabled: true
+      port: 7445
+
+# Cluster configuration
+cluster:
+  # Allow scheduling on control plane nodes (homelab - resource constrained)
+  allowSchedulingOnControlPlanes: true
+
+  # Discovery configuration
+  discovery:
+    enabled: true
+    registries:
+      kubernetes:
+        disabled: false
+      service:
+        disabled: false

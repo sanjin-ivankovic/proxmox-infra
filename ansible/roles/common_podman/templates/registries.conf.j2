@@ -1,0 +1,12 @@
+# Podman Registry Configuration
+# Managed by Ansible - Do not edit manually
+
+unqualified-search-registries = {{ common_podman_registries | to_json }}
+
+{% for registry in common_podman_registries %}
+[[registry]]
+location = "{{ registry }}"
+insecure = false
+blocked = false
+
+{% endfor %}

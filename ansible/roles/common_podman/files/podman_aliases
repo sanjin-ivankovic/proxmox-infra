@@ -1,0 +1,221 @@
+#!/bin/bash
+# Podman-specific bash aliases
+# Deployed by common_podman role
+
+PODMAN_FOLDER=/srv/podman
+
+# PODMAN MANAGEMENT - Container and system-wide operations
+# All Podman commands start with "p"
+
+# Container Management
+alias pps='podman ps -a'                                                           # Show all containers
+alias ppss='podman ps -a --format "table {{.Names}}\t{{.State}}\t{{.Status}}\t{{.Image}}" | (sed -u 1q; sort)' # Formatted container list
+alias pstopraw='podman stop'                                                       # Stop container(s) - Usage: pstopraw container_name
+alias pstopall='podman stop $(podman ps -aq)'                                      # Stop ALL running containers
+alias prm='podman rm'                                                              # Remove container(s) - Usage: prm container_name
+alias pexecraw='podman exec -it'                                                   # Execute into container - Usage: pexecraw container_name bash
+
+# Logs and Monitoring
+alias plogsraw='podman logs -tf --tail="50"'                                       # View container logs - Usage: plogsraw container_name
+alias pips="podman ps -q | xargs -n 1 podman inspect -f '{{.Name}}%tab%{{range .NetworkSettings.Networks}}{{.IPAddress}}%tab%{{end}}' | sed 's#%tab%#\t#g' | sed 's#/##g' | sort | column -t -N NAME,IP\(s\) -o $'\t'" # Show container IPs
+
+# System Information
+alias pinforaw='podman info'                                                       # Show podman system info
+
+# Cleanup Operations (use with caution!)
+alias pprune='podman system prune -a -f'                                          # Remove all unused podman data
+alias pdelimages='podman rmi $(podman images -q) 2>/dev/null'                     # Remove ALL images (use carefully!)
+
+# DANGEROUS: Complete podman cleanup (interactive confirmation)
+perase() {
+    echo "⚠️  WARNING: This will remove ALL containers, images, and unused data!"
+    echo ""
+    read -p "Are you absolutely sure? Type 'YES' to confirm: " -r
+    echo
+    if [[ $REPLY == "YES" ]]; then
+        echo "🗑️  Removing all Podman containers..."
+        # shellcheck disable=SC2046
+        podman stop $(podman ps -aq) 2>/dev/null
+        # shellcheck disable=SC2046
+        podman rm $(podman ps -aq) 2>/dev/null
+        echo "🗑️  Removing all Podman images..."
+        # shellcheck disable=SC2046
+        podman rmi $(podman images -q) 2>/dev/null
+        echo "🗑️  Running system prune..."
+        podman system prune -a -f
+        echo "✅ Podman completely cleaned!"
+    else
+        echo "❌ Operation cancelled. (Type 'YES' to confirm)"
+        return 1
+    fi
+}
+
+# PODMAN COMPOSE - Auto-detect service directories
+# Works with per-application directory structure: /srv/podman/{app-name}/
+# Each directory contains its own docker-compose.yml (Podman uses docker-compose format)
+
+# Helper: Find service directories containing docker-compose.yml
+_get_podman_service_dir() {
+    local service_dir=""
+    local service_dirs=()
+    local dir
+
+    # Find all directories containing docker-compose.yml or compose.yml
+    for dir in "$PODMAN_FOLDER"/*; do
+        if [ -d "$dir" ] && { [ -f "$dir/docker-compose.yml" ] || [ -f "$dir/compose.yml" ]; }; then
+            service_dirs+=("$dir")
+        fi
+    done
+
+    # If multiple services found, prompt user or use first one
+    if [ ${#service_dirs[@]} -eq 0 ]; then
+        echo "❌ Error: No service found in $PODMAN_FOLDER" >&2
+        return 1
+    elif [ ${#service_dirs[@]} -eq 1 ]; then
+        service_dir="${service_dirs[0]}"
+    else
+        # Multiple services - use first one, but warn
+        echo "⚠️  Multiple services found, using: $(basename "${service_dirs[0]}")" >&2
+        service_dir="${service_dirs[0]}"
+    fi
+
+    echo "$service_dir"
+}
+
+# Helper: Get service name for display
+_get_podman_service_name() {
+    local service_dir
+    service_dir=$(_get_podman_service_dir) || return 1
+    basename "$service_dir"
+}
+
+# Podman Compose UP - bring up the service
+pup() {
+    local service_dir
+    local service_name
+    service_dir=$(_get_podman_service_dir) || return 1
+    service_name=$(basename "$service_dir")
+    echo "🚀 Starting service: $service_name"
+    (cd "$service_dir" && podman-compose up -d --build --remove-orphans "$@")
+}
+
+# Podman Compose DOWN - bring down the service
+pdown() {
+    local service_dir
+    local service_name
+    service_dir=$(_get_podman_service_dir) || return 1
+    service_name=$(basename "$service_dir")
+    echo "🛑 Stopping service: $service_name"
+    # Use longer timeout for graceful shutdown (especially for GitLab)
+    (cd "$service_dir" && podman-compose down --timeout 60 --remove-orphans "$@")
+}
+
+# Podman Compose RESTART - restart the service
+prestart() {
+    local service_dir
+    local service_name
+    service_dir=$(_get_podman_service_dir) || return 1
+    service_name=$(basename "$service_dir")
+    echo "🔄 Restarting service: $service_name"
+    (cd "$service_dir" && podman-compose restart "$@")
+}
+
+# Podman Compose START - start stopped service
+pstart() {
+    local service_dir
+    local service_name
+    service_dir=$(_get_podman_service_dir) || return 1
+    service_name=$(basename "$service_dir")
+    echo "▶️  Starting service: $service_name"
+    (cd "$service_dir" && podman-compose start "$@")
+}
+
+# Podman Compose STOP - stop service without removing
+pstop() {
+    local service_dir
+    local service_name
+    service_dir=$(_get_podman_service_dir) || return 1
+    service_name=$(basename "$service_dir")
+    echo "⏸️  Stopping service: $service_name"
+    (cd "$service_dir" && podman-compose stop "$@")
+}
+
+# Podman Compose RECREATE - force recreate containers
+prec() {
+    local service_dir
+    local service_name
+    service_dir=$(_get_podman_service_dir) || return 1
+    service_name=$(basename "$service_dir")
+    echo "♻️  Recreating service: $service_name"
+    (cd "$service_dir" && podman-compose up -d --force-recreate --remove-orphans "$@")
+}
+
+# Podman Compose LOGS - view service logs
+plogs() {
+    local service_dir
+    local service_name
+    service_dir=$(_get_podman_service_dir) || return 1
+    service_name=$(basename "$service_dir")
+    echo "📋 Logs for service: $service_name"
+    (cd "$service_dir" && podman-compose logs -tf --tail="50" "$@")
+}
+
+# Podman Compose PULL - pull new images
+ppull() {
+    local service_dir
+    local service_name
+    service_dir=$(_get_podman_service_dir) || return 1
+    service_name=$(basename "$service_dir")
+    echo "📥 Pulling images for service: $service_name"
+    (cd "$service_dir" && podman-compose pull "$@")
+}
+
+# Podman Compose PS - show containers
+ppps() {
+    local service_dir
+    service_dir=$(_get_podman_service_dir) || return 1
+    (cd "$service_dir" && podman-compose ps "$@")
+}
+
+# Podman Compose CONFIG - validate and view config
+pconfig() {
+    local service_dir
+    service_dir=$(_get_podman_service_dir) || return 1
+    (cd "$service_dir" && podman-compose config "$@")
+}
+
+# Podman Compose EXEC - execute command in container
+pexec() {
+    local service_dir
+    service_dir=$(_get_podman_service_dir) || return 1
+    (cd "$service_dir" && podman-compose exec "$@")
+}
+
+# Generic podman-compose runner for advanced usage
+prun() {
+    local service_dir
+    service_dir=$(_get_podman_service_dir) || return 1
+    (cd "$service_dir" && podman-compose "$@")
+}
+
+# Show current service info
+pinfo() {
+    local service_dir
+    local service_name
+    service_dir=$(_get_podman_service_dir) || return 1
+    service_name=$(basename "$service_dir")
+    echo "📍 Service: $service_name"
+    echo "📁 Location: $service_dir"
+    echo ""
+    if { [ -f "$service_dir/docker-compose.yml" ] || [ -f "$service_dir/compose.yml" ]; }; then
+        echo "✓ compose file found"
+        echo ""
+        (cd "$service_dir" && podman-compose ps)
+    else
+        echo "❌ No compose file found (docker-compose.yml or compose.yml)"
+    fi
+}
+
+# Quick navigation
+alias cdp='cd $PODMAN_FOLDER'     # Jump to podman folder
+alias cdpservice='cd $(_get_podman_service_dir 2>/dev/null || echo $PODMAN_FOLDER)' # Jump to service directory

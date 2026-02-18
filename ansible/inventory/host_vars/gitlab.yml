@@ -1,0 +1,9 @@
+---
+# ansible/inventory/host_vars/gitlab.yml
+# Host-specific configuration for gitlab
+
+# Disable Docker monitoring for this host
+checkmk_agent_enable_docker_monitoring: false
+
+# GitLab uses custom SSH port
+ansible_port: 2424

@@ -1,0 +1,42 @@
+---
+# Configure Playbook - Regular configuration updates
+#
+# This playbook:
+# 1. Connects as non-root user (maintainer) with sudo
+# 2. Updates system packages
+# 3. Configures Docker and services
+# 4. Does NOT modify user or SSH settings
+#
+# Prerequisites:
+# - bootstrap.yml must have run successfully first
+# - Root login is disabled
+# - User 'maintainer' exists with sudo access
+#
+# Usage:
+#   make configure-host HOST=<hostname>
+#   OR
+#   ansible-playbook playbooks/lxc/configure.yml -i inventory/all-hosts.yml
+
+- name: Configure - Regular System Updates
+  hosts: all
+  become: true
+  gather_facts: true
+  remote_user: maintainer  # Use non-root user (root login disabled after bootstrap)
+  tags: [configure]
+
+  roles:
+    - role: common_system
+      tags: [system, packages, update]
+    - role: common_docker
+      tags: [docker, containers]
+
+  post_tasks:
+    - name: Configuration completion message
+      ansible.builtin.debug:
+        msg:
+          - "✓ Configuration complete!"
+          - "  → System packages updated"
+          - "  → Docker configured"
+          - ""
+          - "Services status:"
+          - "  • Docker: systemctl status docker"

@@ -1,0 +1,7 @@
+---
+# AdGuard Home DNS Server (adguard-2) Service Metadata
+# This file is used by the GitLab CI/CD pipeline for automated deployment
+
+# [REQUIRED] Deployment Target
+# Maps to GitLab CI secrets: ENV_ADGUARD_2, HOST_ADGUARD_2, SSH_KEY_ADGUARD_2
+target_host: adguard-2
