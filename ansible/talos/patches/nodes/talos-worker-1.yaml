@@ -1,0 +1,16 @@
+---
+# Node-specific patch for talos-worker-1
+machine:
+  network:
+    interfaces:
+      - interface: ens18
+        addresses:
+          - 10.40.0.51/24
+        routes:
+          - network: 0.0.0.0/0
+            gateway: 10.40.0.1
+---
+apiVersion: v1alpha1
+kind: HostnameConfig
+hostname: talos-worker-1
+auto: off

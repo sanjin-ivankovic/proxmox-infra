@@ -1,0 +1,27 @@
+---
+# ============================================================================
+# Talos Cluster Role - Wait for Talos API
+# ============================================================================
+# Waits for the Talos API to become available on a specific node.
+#
+# Variables:
+#   - talos_cluster_node_ip: IP address of node to check (required)
+#   - talos_cluster_api_port: Talos API port (default: 50000)
+#   - talos_cluster_api_delay: Delay before starting check (default: 20)
+#   - talos_cluster_api_timeout: Timeout in seconds (default: 300)
+#
+# Usage:
+#   - ansible.builtin.include_role:
+#       name: talos_cluster
+#       tasks_from: wait_for_api
+#     vars:
+#       talos_cluster_node_ip: "{{ ansible_host }}"
+# ============================================================================
+
+- name: Wait for Talos API on {{ talos_cluster_node_ip }}
+  ansible.builtin.wait_for:
+    host: "{{ talos_cluster_node_ip }}"
+    port: "{{ talos_cluster_api_port | default(50000) }}"
+    delay: "{{ talos_cluster_api_delay | default(20) }}"
+    timeout: "{{ talos_cluster_api_timeout | default(300) }}"
+  delegate_to: localhost

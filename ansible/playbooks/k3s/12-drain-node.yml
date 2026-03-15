@@ -1,0 +1,67 @@
+---
+# playbooks/k3s/drain-node.yml
+# Safe Node Drain Playbook
+# Usage: ansible-playbook -i ... drain-node.yml -e "target_node=k3s-worker-1"
+
+- name: Drain Specific Node
+  hosts: masters[0]
+  become: true
+  gather_facts: false
+  vars:
+    # Default to empty, must be provided via -e or --extra-vars
+    target_node: ""
+  tasks:
+    - name: Validate target_node is defined
+      ansible.builtin.fail:
+        msg: "Variable 'target_node' is required. Usage: make drain-node HOST=<hostname>"
+      when: target_node == ""
+
+    - name: Verify node exists
+      ansible.builtin.command: kubectl get node {{ target_node }}
+      environment:
+        KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+      register: node_check
+      failed_when: node_check.rc != 0
+      changed_when: false
+
+    - name: Confirm Drain
+      ansible.builtin.pause:
+        prompt: "⚠️  Are you sure you want to cordon and drain {{ target_node }}? (y/N)"
+      register: confirm_drain
+      when: ansible_run_tags != ["check"]
+
+    - name: Abort if not confirmed
+      ansible.builtin.meta: end_play
+      when:
+        - ansible_run_tags != ["check"]
+        - confirm_drain.user_input | lower != "y"
+
+    - name: Cordon Node
+      ansible.builtin.command: kubectl cordon {{ target_node }}
+      environment:
+        KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+      changed_when: true
+
+    - name: Drain Node
+      ansible.builtin.command: >
+        kubectl drain {{ target_node }}
+        --ignore-daemonsets
+        --delete-emptydir-data
+        --grace-period=180
+        --timeout=20m
+        --disable-eviction
+        --force
+      environment:
+        KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+      register: drain_result
+      failed_when: false
+      changed_when: true
+
+    - name: Drain Status
+      ansible.builtin.debug:
+        msg: |
+          Node {{ target_node }} is cordoned and drained.
+          Result: {{ 'Success' if drain_result.rc == 0 else 'Partial/Timeout' }}
+
+          To uncordon later:
+          kubectl uncordon {{ target_node }}

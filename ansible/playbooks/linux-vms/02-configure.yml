@@ -1,0 +1,42 @@
+---
+# Configure Playbook - Regular configuration updates
+#
+# This playbook:
+# 1. Connects as non-root user with sudo (configured in ansible.cfg)
+# 2. Updates system packages
+# 3. Configures services as needed
+# 4. Does NOT modify user or SSH settings
+#
+# Prerequisites:
+# - bootstrap.yml must have run successfully first
+# - Root login is disabled
+# - Non-root user exists with sudo access (see ansible.cfg remote_user)
+#
+# Usage:
+#   make configure-host HOST=<hostname>
+#   OR
+#   ansible-playbook linux-vms/playbooks/configure.yml -i linux-vms/inventory/hosts.yml --limit <hostname>
+
+- name: Configure - Regular System Updates (Linux VMs)
+  hosts: all
+  become: true
+  gather_facts: true
+  tags: [configure]
+
+  roles:
+    - role: common_system
+      tags: [system, packages, update]
+    # - role: common_docker
+    #   tags: [docker, containers]
+    - role: common_podman
+      tags: [podman, install, config]
+
+  post_tasks:
+    - name: Configuration completion message
+      ansible.builtin.debug:
+        msg:
+          - "✓ Configuration complete!"
+          - "  → System packages updated"
+          - "  → Podman configured"
+          - ""
+          - "Add additional roles as needed for your Linux VM requirements"

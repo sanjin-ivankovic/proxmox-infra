@@ -1,0 +1,23 @@
+---
+# roles/k3s_system_prep/tasks/05-networking.yml
+
+# Gather network interface and IP address facts for the host
+- name: Get network facts
+  ansible.builtin.setup:
+    gather_subset: network
+  check_mode: false
+
+# Set the system hostname to match the inventory name if enabled
+- name: Setup hostname
+  ansible.builtin.hostname:
+    name: '{{ inventory_hostname }}'
+  when: k3s_system_prep_configure_hostname | default(true) | bool
+
+# Ensure /etc/hosts contains an entry mapping the host's IP to its hostname if enabled
+- name: Configure /etc/hosts
+  ansible.builtin.lineinfile:
+    path: /etc/hosts
+    regexp: "^{{ ansible_host }}\\s+{{ inventory_hostname }}$"
+    line: '{{ ansible_host }} {{ inventory_hostname }}'
+    state: present
+  when: k3s_system_prep_configure_hosts | default(true) | bool

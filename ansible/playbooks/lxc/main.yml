@@ -1,0 +1,137 @@
+---
+# ============================================================================
+# LXC Containers - Main Playbook (Orchestrator)
+# ============================================================================
+# This playbook imports all individual LXC playbooks and allows running
+# them with tags for flexible workflow management.
+#
+# Prerequisites:
+#   - Proxmox LXC containers created via Terraform
+#   - Inventory generated from Terraform
+#   - SSH access to LXC containers configured
+#
+# Usage Examples:
+#
+#   # Full deployment workflow (bootstrap, configure, verify)
+#   ansible-playbook -i ../../lxc/inventory/hosts.yml main.yml --tags deployment
+#
+#   # Individual operations
+#   ansible-playbook -i ../../lxc/inventory/hosts.yml main.yml --tags bootstrap
+#   ansible-playbook -i ../../lxc/inventory/hosts.yml main.yml --tags configure
+#   ansible-playbook -i ../../lxc/inventory/hosts.yml main.yml --tags verify
+#   ansible-playbook -i ../../lxc/inventory/hosts.yml main.yml --tags system-update
+#   ansible-playbook -i ../../lxc/inventory/hosts.yml main.yml --tags diagnostics
+#   ansible-playbook -i ../../lxc/inventory/hosts.yml main.yml --tags restart-services
+#   ansible-playbook -i ../../lxc/inventory/hosts.yml main.yml --tags reboot
+#
+#   # Operational tasks
+#   ansible-playbook -i ../../lxc/inventory/hosts.yml main.yml --tags operations
+#
+#   # Lifecycle operations (requires explicit tag)
+#   ansible-playbook -i ../../lxc/inventory/hosts.yml main.yml --tags reboot
+#   ansible-playbook -i ../../lxc/inventory/hosts.yml main.yml --tags shutdown
+#
+#   # Multiple operations
+#   ansible-playbook -i ../../lxc/inventory/hosts.yml main.yml --tags "bootstrap,configure,verify"
+#
+#   # List all available tags
+#   ansible-playbook -i ../../lxc/inventory/hosts.yml main.yml --list-tags
+#
+# Tag Groups:
+#   deployment      - Full deployment workflow (bootstrap, configure, verify)
+#   operations      - Operational tasks (system-update, diagnostics)
+#   lifecycle       - Container lifecycle (restart-services, reboot, shutdown)
+#   all             - Everything except 'never'-tagged playbooks
+#
+# Tag Reference:
+#   bootstrap          - Initial container setup (01)
+#   configure          - Apply configuration (02)
+#   verify             - Verify container health (03)
+#   system-update      - Update system packages (04)
+#   diagnostics        - Collect diagnostics (05)
+#   restart-services   - Restart container services (06)
+#   reboot             - Reboot containers (07)
+#   shutdown           - Graceful shutdown (08) - DESTRUCTIVE, requires explicit tag
+# ============================================================================
+
+# ==============================================================================
+# 01: Bootstrap LXC Containers
+# ==============================================================================
+
+- name: Import 01-bootstrap playbook
+  ansible.builtin.import_playbook: 01-bootstrap.yml
+  tags:
+    - bootstrap
+    - deployment
+
+# ==============================================================================
+# 02: Configure LXC Containers
+# ==============================================================================
+
+- name: Import 02-configure playbook
+  ansible.builtin.import_playbook: 02-configure.yml
+  tags:
+    - configure
+    - deployment
+
+# ==============================================================================
+# 03: Verify LXC Containers
+# ==============================================================================
+
+- name: Import 03-verify playbook
+  ansible.builtin.import_playbook: 03-verify.yml
+  tags:
+    - verify
+    - deployment
+
+# ==============================================================================
+# 04: System Update
+# ==============================================================================
+
+- name: Import 04-system-update playbook
+  ansible.builtin.import_playbook: 04-system-update.yml
+  tags:
+    - system-update
+    - operations
+
+# ==============================================================================
+# 05: Collect Diagnostics
+# ==============================================================================
+
+- name: Import 05-diagnostics playbook
+  ansible.builtin.import_playbook: 05-diagnostics.yml
+  tags:
+    - diagnostics
+    - operations
+
+# ==============================================================================
+# 06: Restart Services
+# ==============================================================================
+
+- name: Import 06-restart-services playbook
+  ansible.builtin.import_playbook: 06-restart-services.yml
+  tags:
+    - restart-services
+    - lifecycle
+
+# ==============================================================================
+# 07: Reboot Containers
+# ==============================================================================
+
+- name: Import 07-reboot playbook
+  ansible.builtin.import_playbook: 07-reboot.yml
+  tags:
+    - reboot
+    - lifecycle
+    - never
+
+# ==============================================================================
+# 08: Graceful Shutdown (DESTRUCTIVE)
+# ==============================================================================
+
+- name: Import 08-shutdown playbook
+  ansible.builtin.import_playbook: 08-shutdown.yml
+  tags:
+    - shutdown
+    - lifecycle
+    - never

@@ -1,0 +1,6 @@
+---
+# ansible/inventory/host_vars/gitlab.yml
+# Host-specific configuration for gitlab
+
+# GitLab uses custom SSH port
+ansible_port: 2424

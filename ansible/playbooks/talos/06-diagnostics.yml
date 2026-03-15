@@ -1,0 +1,192 @@
+---
+# ============================================================================
+# Collect Talos Cluster Diagnostics
+# ============================================================================
+# This playbook collects comprehensive logs and diagnostic information from
+# Talos nodes and saves them to timestamped reports.
+#
+# Output: talos/diagnostics/<timestamp>/
+#
+# Usage:
+#   cd /home/user/projects/proxmox-infra/ansible/talos
+#   make diagnostics
+# ============================================================================
+
+- name: Prepare diagnostics collection
+  hosts: localhost
+  gather_facts: true
+  become: false  # Talos uses API - no privilege escalation needed
+
+  tasks:
+    - name: Create diagnostics directory with timestamp
+      ansible.builtin.set_fact:
+        diagnostics_dir: "{{ playbook_dir }}/../../talos/diagnostics/{{ ansible_date_time.iso8601_basic_short }}"
+
+    - name: Ensure diagnostics directory exists
+      ansible.builtin.file:
+        path: "{{ diagnostics_dir }}"
+        state: directory
+        mode: "0755"
+
+- name: Collect Talos diagnostics from all nodes
+  hosts: talos
+  gather_facts: false
+  become: false  # Talos uses API - no privilege escalation needed
+  connection: local
+
+  tasks:
+    - name: Get Talos version
+      ansible.builtin.command:
+        cmd: >
+          talosctl version
+          --talosconfig {{ talos_config_file }}
+          --nodes {{ ansible_host }}
+      environment:
+        TALOSCONFIG: "{{ talos_config_file }}"
+      register: version
+      changed_when: false
+      failed_when: false
+      delegate_to: localhost
+
+    - name: Get service status
+      ansible.builtin.command:
+        cmd: >
+          talosctl services
+          --talosconfig {{ talos_config_file }}
+          --nodes {{ ansible_host }}
+      environment:
+        TALOSCONFIG: "{{ talos_config_file }}"
+      register: services
+      changed_when: false
+      failed_when: false
+      delegate_to: localhost
+
+    - name: Get kernel logs (dmesg)
+      ansible.builtin.command:
+        cmd: >
+          talosctl dmesg
+          --talosconfig {{ talos_config_file }}
+          --nodes {{ ansible_host }}
+          --tail 200
+      environment:
+        TALOSCONFIG: "{{ talos_config_file }}"
+      register: dmesg
+      changed_when: false
+      failed_when: false
+      delegate_to: localhost
+
+    - name: Get etcd members (control planes only)
+      ansible.builtin.command:
+        cmd: >
+          talosctl etcd members
+          --talosconfig {{ talos_config_file }}
+          --nodes {{ ansible_host }}
+      environment:
+        TALOSCONFIG: "{{ talos_config_file }}"
+      register: etcd_members
+      changed_when: false
+      failed_when: false
+      delegate_to: localhost
+      when: talos_role == 'controlplane'
+
+    - name: Get etcd status (control planes only)
+      ansible.builtin.command:
+        cmd: >
+          talosctl etcd status
+          --talosconfig {{ talos_config_file }}
+          --nodes {{ ansible_host }}
+      environment:
+        TALOSCONFIG: "{{ talos_config_file }}"
+      register: etcd_status
+      changed_when: false
+      failed_when: false
+      delegate_to: localhost
+      when: talos_role == 'controlplane'
+
+    - name: Get resource usage
+      ansible.builtin.command:
+        cmd: >
+          talosctl get members
+          --talosconfig {{ talos_config_file }}
+          --nodes {{ ansible_host }}
+      environment:
+        TALOSCONFIG: "{{ talos_config_file }}"
+      register: members
+      changed_when: false
+      failed_when: false
+      delegate_to: localhost
+
+    - name: Save diagnostics to file
+      ansible.builtin.copy:
+        content: |
+          ============================================================================
+          Talos Node Diagnostics Report
+          ============================================================================
+          Node: {{ inventory_hostname }}
+          IP: {{ ansible_host }}
+          Role: {{ talos_role }}
+          Collected: {{ hostvars['localhost'].ansible_date_time.iso8601 }}
+
+          ============================================================================
+          Version Information
+          ============================================================================
+          {{ version.stdout if version.rc == 0 else 'Failed to retrieve' }}
+
+          ============================================================================
+          Service Status
+          ============================================================================
+          {{ services.stdout if services.rc == 0 else 'Failed to retrieve' }}
+
+          ============================================================================
+          Kernel Logs (last 200 lines)
+          ============================================================================
+          {{ dmesg.stdout if dmesg.rc == 0 else 'Failed to retrieve' }}
+
+          {% if talos_role == 'controlplane' %}
+          ============================================================================
+          Etcd Members
+          ============================================================================
+          {{ etcd_members.stdout if etcd_members.rc == 0 else 'Failed to retrieve' }}
+
+          ============================================================================
+          Etcd Status
+          ============================================================================
+          {{ etcd_status.stdout if etcd_status.rc == 0 else 'Failed to retrieve' }}
+          {% endif %}
+
+          ============================================================================
+          Cluster Members
+          ============================================================================
+          {{ members.stdout if members.rc == 0 else 'Failed to retrieve' }}
+
+        dest: "{{ hostvars['localhost']['diagnostics_dir'] }}/{{ inventory_hostname }}.txt"
+        mode: "0644"
+      delegate_to: localhost
+
+    - name: Display summary
+      ansible.builtin.debug:
+        msg: "✓ Diagnostics collected for {{ inventory_hostname }}"
+
+- name: Display completion summary
+  hosts: localhost
+  gather_facts: false
+  become: false  # Talos uses API - no privilege escalation needed
+
+  tasks:
+    - name: Final summary
+      ansible.builtin.debug:
+        msg: |
+          ============================================================================
+          ✓ Diagnostics Collection Complete
+          ============================================================================
+
+          Reports saved to: {{ diagnostics_dir }}/
+
+          Files:
+          {% for host in groups['talos'] %}
+          - {{ host }}.txt
+          {% endfor %}
+
+          To view a report:
+            cat {{ diagnostics_dir }}/<node>.txt
+          ============================================================================

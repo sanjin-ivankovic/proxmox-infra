@@ -1,0 +1,154 @@
+---
+# ============================================================================
+# Reset Talos Cluster
+# ============================================================================
+# DESTRUCTIVE: Completely resets the cluster, wiping all data. # Workers are reset first, then control planes.
+#
+# This will:
+#   - Reset all Kubernetes state
+#   - Wipe etcd data
+#   - Reset all node configurations
+#   - Revert nodes to maintenance mode
+#
+# After reset, you'll need to:
+#   1. Re-apply configs: make apply-configs
+#   2. Re-bootstrap cluster: make bootstrap
+#
+# Usage:
+#   cd /home/user/projects/proxmox-infra/ansible/talos
+#   make reset  # Will prompt for confirmation
+#   OR
+#   ansible-playbook -i inventory/hosts.yml ../playbooks/talos/12-reset.yml
+# ============================================================================
+
+- name: Confirm cluster reset
+  hosts: localhost
+  gather_facts: false
+  become: false  # Talos uses API - no privilege escalation needed
+
+  tasks:
+    - name: Display warning
+      ansible.builtin.debug:
+        msg: |
+          ⚠️  WARNING: This will COMPLETELY RESET the Talos cluster!
+
+          This operation will:
+            - Destroy all Kubernetes resources
+            - Wipe etcd data on control planes
+            - Reset all node configurations
+            - Revert nodes to maintenance mode
+
+          You will need to re-apply configs and re-bootstrap the cluster.
+
+          This action CANNOT be undone!
+
+    - name: Require confirmation
+      ansible.builtin.pause:
+        prompt: "Type 'yes' to proceed with cluster reset"
+      register: confirmation
+
+    - name: Abort if not confirmed
+      ansible.builtin.fail:
+        msg: "Reset aborted - confirmation not received"
+      when: confirmation.user_input != 'yes'
+
+- name: Reset Talos worker nodes first
+  hosts: workers
+  gather_facts: false
+  become: false  # Talos uses API - no privilege escalation needed
+  connection: local
+  serial: 1 # Reset workers one at a time
+
+  tasks:
+    - name: Reset worker node - {{ inventory_hostname }}
+      ansible.builtin.command:
+        cmd: >
+          talosctl reset
+          --talosconfig {{ talos_config_file }}
+          --nodes {{ ansible_host }}
+          --endpoints {{ ansible_host }}
+          --graceful
+          --reboot
+      environment:
+        TALOSCONFIG: "{{ talos_config_file }}"
+      register: reset_result
+      changed_when: reset_result.rc == 0
+      failed_when: false
+      delegate_to: localhost
+
+    - name: Wait for worker node to reboot
+      ansible.builtin.wait_for:
+        host: "{{ ansible_host }}"
+        port: 50000
+        state: stopped
+        timeout: 120
+      delegate_to: localhost
+      failed_when: false
+
+    - name: Display reset status
+      ansible.builtin.debug:
+        msg: "✓ {{ inventory_hostname }} (worker) reset"
+
+- name: Reset Talos control plane nodes
+  hosts: controlplane
+  gather_facts: false
+  become: false  # Talos uses API - no privilege escalation needed
+  connection: local
+  serial: 1 # Reset control planes one at a time
+
+  tasks:
+    - name: Reset control plane node - {{ inventory_hostname }}
+      ansible.builtin.command:
+        cmd: >
+          talosctl reset
+          --talosconfig {{ talos_config_file }}
+          --nodes {{ ansible_host }}
+          --endpoints {{ ansible_host }}
+          --graceful
+          --reboot
+      environment:
+        TALOSCONFIG: "{{ talos_config_file }}"
+      register: reset_result
+      changed_when: reset_result.rc == 0
+      failed_when: false
+      delegate_to: localhost
+
+    - name: Wait for control plane node to reboot
+      ansible.builtin.wait_for:
+        host: "{{ ansible_host }}"
+        port: 50000
+        state: stopped
+        timeout: 120
+      delegate_to: localhost
+      failed_when: false
+
+    - name: Display reset status
+      ansible.builtin.debug:
+        msg: "✓ {{ inventory_hostname }} (control plane) reset"
+
+- name: Display next steps
+  hosts: localhost
+  gather_facts: false
+  become: false  # Talos uses API - no privilege escalation needed
+
+  tasks:
+    - name: Final summary
+      ansible.builtin.debug:
+        msg: |
+          ============================================================================
+          ✓ Talos Cluster Reset Complete
+          ============================================================================
+
+          All nodes have been reset to maintenance mode.
+
+          Next steps to rebuild the cluster:
+          1. Wait for all nodes to boot (they should appear in maintenance mode)
+          2. Re-apply configurations:
+               cd talos && make apply-configs
+          3. Re-bootstrap the cluster:
+               cd talos && make bootstrap
+          4. Verify cluster health:
+               cd talos && make verify
+
+          Note: All previous cluster data has been permanently destroyed.
+          ============================================================================

@@ -1,0 +1,48 @@
+# ============================================================================
+# K3s VM Instance Definitions (Example)
+# ============================================================================
+# Copy this file to k3s-vms.auto.tfvars and customize for your environment.
+#
+# Usage:
+#   cp instances/k3s-vms.auto.tfvars.example instances/k3s-vms.auto.tfvars
+#   nano instances/k3s-vms.auto.tfvars
+#   terraform plan && terraform apply
+# ============================================================================
+
+k3s_vm_instances = [
+  # ========================================================================
+  # K3s Masters (Control Plane)
+  # ========================================================================
+  # {
+  #   hostname = "k3s-master-1"
+  #   vmid     = 420
+  #   ip       = "10.40.0.20/24"
+  #   gw       = "10.40.0.1"
+  #   cores    = 2
+  #   memory   = 4096
+  #   disk_size = "50G"
+  #   onboot   = true
+  #   start    = true
+  #   tags     = ["k3s", "master"]
+  #   tag      = 40
+  #   k3s_role = "master"
+  # },
+
+  # ========================================================================
+  # K3s Workers
+  # ========================================================================
+  # {
+  #   hostname = "k3s-worker-1"
+  #   vmid     = 430
+  #   ip       = "10.40.0.30/24"
+  #   gw       = "10.40.0.1"
+  #   cores    = 4
+  #   memory   = 8192
+  #   disk_size = "100G"
+  #   onboot   = true
+  #   start    = true
+  #   tags     = ["k3s", "worker"]
+  #   tag      = 40
+  #   k3s_role = "worker"
+  # },
+]

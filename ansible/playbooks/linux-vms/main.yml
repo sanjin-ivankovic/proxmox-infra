@@ -1,0 +1,135 @@
+---
+# ============================================================================
+# Linux VMs - Main Playbook (Orchestrator)
+# ============================================================================
+# This playbook imports all individual Linux VM playbooks and allows running
+# them with tags for flexible workflow management.
+#
+# Prerequisites:
+#   - Proxmox VMs created via Terraform
+#   - Inventory generated from Terraform
+#   - SSH access configured (bootstrap must run first as root)
+#
+# Usage Examples:
+#
+#   # Full deployment workflow (bootstrap, configure, verify)
+#   ansible-playbook main.yml --tags deployment
+#
+#   # Individual operations
+#   ansible-playbook main.yml --tags bootstrap
+#   ansible-playbook main.yml --tags configure
+#   ansible-playbook main.yml --tags verify
+#   ansible-playbook main.yml --tags system-update
+#   ansible-playbook main.yml --tags diagnostics
+#   ansible-playbook main.yml --tags restart-services
+#   ansible-playbook main.yml --tags reboot
+#   ansible-playbook main.yml --tags shutdown
+#
+#   # Tag groups
+#   ansible-playbook main.yml --tags deployment    # 01-bootstrap, 02-configure, 03-verify
+#   ansible-playbook main.yml --tags operations    # 04-system-update, 05-diagnostics
+#   ansible-playbook main.yml --tags lifecycle     # 06-restart-services, 07-reboot, 08-shutdown
+#
+#   # List all available tags
+#   ansible-playbook main.yml --list-tags
+#
+# Tag Groups:
+#   deployment      - Full deployment workflow (bootstrap, configure, verify)
+#   operations      - Operational tasks (system-update, diagnostics)
+#   lifecycle       - Service and VM lifecycle (restart-services, reboot, shutdown)
+#   all             - Everything (use with caution)
+#
+# Tag Reference:
+#   bootstrap         - Initial user setup as root (01)
+#   configure         - Regular system configuration (02)
+#   verify            - Verify VM health (03)
+#   system-update     - Update system packages (04)
+#   diagnostics       - Collect diagnostic info (05)
+#   restart-services  - Restart Podman services (06)
+#   reboot            - Rolling reboot (07)
+#   shutdown          - Graceful shutdown (08) - REQUIRES explicit tag
+# ============================================================================
+
+# ==============================================================================
+# 01: Bootstrap - Initial User Setup
+# ==============================================================================
+
+- name: Import 01-bootstrap playbook
+  ansible.builtin.import_playbook: 01-bootstrap.yml
+  tags:
+    - bootstrap
+    - deployment
+    - never  # Don't run in 'all' to prevent accidental re-bootstrap
+
+# ==============================================================================
+# 02: Configure - Regular System Updates
+# ==============================================================================
+
+- name: Import 02-configure playbook
+  ansible.builtin.import_playbook: 02-configure.yml
+  tags:
+    - configure
+    - deployment
+
+# ==============================================================================
+# 03: Verify - VM Health Check
+# ==============================================================================
+
+- name: Import 03-verify playbook
+  ansible.builtin.import_playbook: 03-verify.yml
+  tags:
+    - verify
+    - deployment
+    - operations
+
+# ==============================================================================
+# 04: System Update - Package Updates
+# ==============================================================================
+
+- name: Import 04-system-update playbook
+  ansible.builtin.import_playbook: 04-system-update.yml
+  tags:
+    - system-update
+    - operations
+
+# ==============================================================================
+# 05: Diagnostics - Collect System Info
+# ==============================================================================
+
+- name: Import 05-diagnostics playbook
+  ansible.builtin.import_playbook: 05-diagnostics.yml
+  tags:
+    - diagnostics
+    - operations
+
+# ==============================================================================
+# 06: Restart Services - Podman
+# ==============================================================================
+
+- name: Import 06-restart-services playbook
+  ansible.builtin.import_playbook: 06-restart-services.yml
+  tags:
+    - restart-services
+    - lifecycle
+
+# ==============================================================================
+# 07: Rolling Reboot
+# ==============================================================================
+
+- name: Import 07-reboot playbook
+  ansible.builtin.import_playbook: 07-reboot.yml
+  tags:
+    - reboot
+    - lifecycle
+    - never  # Require explicit tag
+
+# ==============================================================================
+# 08: Graceful Shutdown
+# ==============================================================================
+
+- name: Import 08-shutdown playbook
+  ansible.builtin.import_playbook: 08-shutdown.yml
+  tags:
+    - shutdown
+    - lifecycle
+    - never  # Require explicit tag - destructive operation

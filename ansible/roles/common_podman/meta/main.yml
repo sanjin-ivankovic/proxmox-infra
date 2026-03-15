@@ -1,0 +1,27 @@
+---
+# ansible/roles/common_podman/meta/main.yml
+
+galaxy_info:
+  role_name: common_podman
+  author: Maintainer Name
+  description: Rootless Podman installation and configuration for Debian/Ubuntu
+  license: MIT
+  min_ansible_version: '2.9'
+  platforms:
+    - name: Debian
+      versions:
+        - 'trixie'
+    - name: Ubuntu
+      versions:
+        - 'noble'
+  galaxy_tags:
+    - podman
+    - containers
+    - rootless
+    - debian
+    - ubuntu
+
+dependencies:
+  - role: common_system
+
+allow_duplicates: false

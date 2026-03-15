@@ -1,0 +1,12 @@
+---
+# roles/k3s_cluster/handlers/main.yml
+
+- name: Get recent K3s server logs
+  ansible.builtin.command: journalctl -u k3s -n 30 --no-pager
+  register: k3s_cluster_server_logs
+  changed_when: false
+
+- name: Get recent K3s agent logs
+  ansible.builtin.command: journalctl -u k3s-agent -n 30 --no-pager
+  register: k3s_cluster_agent_logs
+  changed_when: false

@@ -1,0 +1,204 @@
+---
+# ============================================================================
+# K3s Cluster - Main Playbook (Orchestrator)
+# ============================================================================
+# This playbook imports all individual K3s playbooks and allows running
+# them with tags for flexible workflow management.
+#
+# Prerequisites:
+#   - kubectl installed and configured
+#   - K3s nodes provisioned via Terraform
+#   - Inventory generated from Terraform
+#
+# Usage Examples:
+#
+#   # Full deployment workflow
+#   ansible-playbook -i ../../k3s/inventory/hosts.yml main.yml --tags deployment
+#
+#   # Individual operations
+#   ansible-playbook -i ../../k3s/inventory/hosts.yml main.yml --tags bootstrap
+#   ansible-playbook -i ../../k3s/inventory/hosts.yml main.yml --tags configure-labels
+#   ansible-playbook -i ../../k3s/inventory/hosts.yml main.yml --tags verify
+#
+#   # Operational tasks
+#   ansible-playbook -i ../../k3s/inventory/hosts.yml main.yml --tags update
+#   ansible-playbook -i ../../k3s/inventory/hosts.yml main.yml --tags system-update
+#   ansible-playbook -i ../../k3s/inventory/hosts.yml main.yml --tags diagnostics
+#   ansible-playbook -i ../../k3s/inventory/hosts.yml main.yml --tags health-check
+#
+#   # Lifecycle operations (require explicit tag)
+#   ansible-playbook -i ../../k3s/inventory/hosts.yml main.yml --tags restart
+#   ansible-playbook -i ../../k3s/inventory/hosts.yml main.yml --tags reboot
+#   ansible-playbook -i ../../k3s/inventory/hosts.yml main.yml --tags shutdown
+#   ansible-playbook -i ../../k3s/inventory/hosts.yml main.yml --tags startup
+#
+#   # Node operations (require explicit tag - destructive)
+#   ansible-playbook -i ../../k3s/inventory/hosts.yml main.yml --tags drain-node
+#   ansible-playbook -i ../../k3s/inventory/hosts.yml main.yml --tags maintenance-mode
+#
+#   # Multiple operations
+#   ansible-playbook -i ../../k3s/inventory/hosts.yml main.yml --tags "bootstrap,configure-labels,verify"
+#
+#   # List all available tags
+#   ansible-playbook -i ../../k3s/inventory/hosts.yml main.yml --list-tags
+#
+# Tag Groups:
+#   deployment      - Complete deployment workflow (bootstrap, configure-labels, verify)
+#   operations      - Operational tasks (update, system-update, diagnostics, health-check)
+#   lifecycle       - Service/VM lifecycle (restart, reboot, shutdown, startup)
+#   node-ops        - Node operations (drain-node, maintenance-mode)
+#   all             - Everything (use with caution)
+#
+# Tag Reference:
+#   bootstrap         - Bootstrap K3s cluster (01)
+#   configure-labels  - Configure node labels (02)
+#   verify            - Verify cluster health (03)
+#   update            - Update K3s version (04)
+#   system-update     - Update host OS packages (05)
+#   diagnostics       - Collect diagnostics (06)
+#   health-check      - Comprehensive health check (07)
+#   restart           - Restart K3s service (08)
+#   reboot            - Rolling reboot of nodes (09)
+#   shutdown          - Graceful shutdown (10) - DESTRUCTIVE
+#   startup           - Start VMs after shutdown (11)
+#   drain-node        - Drain workloads from node (12) - DESTRUCTIVE
+#   maintenance-mode  - Enter maintenance mode (13) - DESTRUCTIVE
+# ============================================================================
+
+# ==============================================================================
+# 01: Bootstrap K3s Cluster
+# ==============================================================================
+
+- name: Import 01-bootstrap playbook
+  ansible.builtin.import_playbook: 01-bootstrap.yml
+  tags:
+    - bootstrap
+    - deployment
+
+# ==============================================================================
+# 02: Configure Node Labels
+# ==============================================================================
+
+- name: Import 02-configure-labels playbook
+  ansible.builtin.import_playbook: 02-configure-labels.yml
+  tags:
+    - configure-labels
+    - deployment
+
+# ==============================================================================
+# 03: Verify Cluster Health
+# ==============================================================================
+
+- name: Import 03-verify playbook
+  ansible.builtin.import_playbook: 03-verify.yml
+  tags:
+    - verify
+    - deployment
+    - operations
+
+# ==============================================================================
+# 04: Update K3s Version
+# ==============================================================================
+
+- name: Import 04-update playbook
+  ansible.builtin.import_playbook: 04-update.yml
+  tags:
+    - update
+    - operations
+    - never  # Require explicit tag to prevent accidental upgrades
+
+# ==============================================================================
+# 05: System Update (Host OS)
+# ==============================================================================
+
+- name: Import 05-system-update playbook
+  ansible.builtin.import_playbook: 05-system-update.yml
+  tags:
+    - system-update
+    - operations
+    - never  # Require explicit tag to prevent accidental upgrades
+
+# ==============================================================================
+# 06: Collect Cluster Diagnostics
+# ==============================================================================
+
+- name: Import 06-diagnostics playbook
+  ansible.builtin.import_playbook: 06-diagnostics.yml
+  tags:
+    - diagnostics
+    - operations
+
+# ==============================================================================
+# 07: Comprehensive Health Check
+# ==============================================================================
+
+- name: Import 07-health-check playbook
+  ansible.builtin.import_playbook: 07-health-check.yml
+  tags:
+    - health-check
+    - operations
+
+# ==============================================================================
+# 08: Restart K3s Service
+# ==============================================================================
+
+- name: Import 08-restart playbook
+  ansible.builtin.import_playbook: 08-restart.yml
+  tags:
+    - restart
+    - lifecycle
+    - never  # Require explicit tag
+
+# ==============================================================================
+# 09: Rolling Reboot
+# ==============================================================================
+
+- name: Import 09-reboot playbook
+  ansible.builtin.import_playbook: 09-reboot.yml
+  tags:
+    - reboot
+    - lifecycle
+    - never  # Require explicit tag
+
+# ==============================================================================
+# 10: Graceful Shutdown
+# ==============================================================================
+
+- name: Import 10-shutdown playbook
+  ansible.builtin.import_playbook: 10-shutdown.yml
+  tags:
+    - shutdown
+    - lifecycle
+    - never  # Require explicit tag - DESTRUCTIVE
+
+# ==============================================================================
+# 11: Startup After Shutdown
+# ==============================================================================
+
+- name: Import 11-startup playbook
+  ansible.builtin.import_playbook: 11-startup.yml
+  tags:
+    - startup
+    - lifecycle
+
+# ==============================================================================
+# 12: Drain Node
+# ==============================================================================
+
+- name: Import 12-drain-node playbook
+  ansible.builtin.import_playbook: 12-drain-node.yml
+  tags:
+    - drain-node
+    - node-ops
+    - never  # Require explicit tag - DESTRUCTIVE
+
+# ==============================================================================
+# 13: Maintenance Mode
+# ==============================================================================
+
+- name: Import 13-maintenance-mode playbook
+  ansible.builtin.import_playbook: 13-maintenance-mode.yml
+  tags:
+    - maintenance-mode
+    - node-ops
+    - never  # Require explicit tag - DESTRUCTIVE

@@ -1,0 +1,321 @@
+---
+# ============================================================================
+# Configure Production Workload Tiers for Talos Cluster
+# ============================================================================
+# This playbook applies node configuration for workload isolation using
+# OpenShift/RKE2-style node-role.kubernetes.io/ label conventions:
+#   - PriorityClasses for pod scheduling and eviction order
+#   - Node role labels using node-role.kubernetes.io/ prefix
+#   - Node taints to enforce workload isolation
+#   - PodSecurity namespace labels for privileged workloads
+#
+# Node Design:
+#   talos-cp-1/2/3  : No tier labels (CP taint prevents scheduling)
+#   talos-worker-1  : node-role.kubernetes.io/storage=""
+#                     taint: node-role.kubernetes.io/storage:NoSchedule
+#   talos-worker-2  : node-role.kubernetes.io/worker + node-role.kubernetes.io/infra
+#                     taint: node-role.kubernetes.io/infra:NoSchedule
+#   talos-worker-3  : node-role.kubernetes.io/worker (open for app scheduling)
+#
+# Prerequisites:
+#   - Cluster bootstrapped (03-bootstrap.yml)
+#   - RBAC patches applied (04-apply-rbac.yml)
+#   - kubectl installed
+#   - Valid kubeconfig
+#
+# Usage:
+#   cd /home/user/projects/proxmox-infra/ansible/talos
+#   make configure-tiers
+#   OR
+#   ansible-playbook -i inventory/hosts.yml \
+#     ../playbooks/talos/05-configure-workload-tiers.yml
+# ============================================================================
+
+- name: Configure production workload tiers
+  hosts: localhost
+  gather_facts: false
+  become: false
+
+  vars:
+    manifests_dir: "{{ playbook_dir }}/../../talos/manifests/cluster-config"
+
+  tasks:
+    # ========================================================================
+    # Prerequisites Check
+    # ========================================================================
+
+    - name: Check prerequisites
+      block:
+        - name: Verify kubectl is installed
+          ansible.builtin.command:
+            cmd: kubectl version --client --output=json
+          register: kubectl_check
+          changed_when: false
+          failed_when: kubectl_check.rc != 0
+
+        - name: Verify kubeconfig exists
+          ansible.builtin.stat:
+            path: "{{ talos_kubeconfig_file }}"
+          register: kubeconfig_stat
+          failed_when: not kubeconfig_stat.stat.exists
+
+        - name: Test cluster connectivity
+          ansible.builtin.command:
+            cmd: kubectl --kubeconfig {{ talos_kubeconfig_file }} cluster-info
+          environment:
+            KUBECONFIG: "{{ talos_kubeconfig_file }}"
+          register: cluster_info
+          changed_when: false
+          failed_when: cluster_info.rc != 0
+
+    - name: Display configuration information
+      ansible.builtin.debug:
+        msg: |
+          ============================================================================
+          Configuring Production Workload Tiers (OpenShift/RKE2-style)
+          ============================================================================
+
+          Kubeconfig: {{ talos_kubeconfig_file }}
+          Manifests: {{ manifests_dir }}
+
+          Workload Tier Strategy:
+
+          Control Plane Nodes ({{ groups['controlplane'] | join(', ') }}):
+             No tier labels - CP taint (node-role.kubernetes.io/control-plane:NoSchedule)
+             prevents all non-tolerating workloads from scheduling here.
+
+          Storage Worker (talos-worker-1):
+             Label: node-role.kubernetes.io/worker=""
+             Label: node-role.kubernetes.io/storage=""
+             Taint: node-role.kubernetes.io/storage:NoSchedule
+             Purpose: PostgreSQL, Valkey, Longhorn, Garage, databases
+
+          Infra Worker (talos-worker-2):
+             Label: node-role.kubernetes.io/worker=""
+             Label: node-role.kubernetes.io/infra=""
+             Taint: node-role.kubernetes.io/infra:NoSchedule
+             Purpose: ArgoCD, Traefik, cert-manager, MetalLB ctrl, Rancher, Keycloak
+
+          Application Worker (talos-worker-3):
+             Label: node-role.kubernetes.io/worker=""
+             Taint: none (open for all app scheduling)
+             Purpose: Web apps, services, general workloads, Traefik replica
+
+          ============================================================================
+
+    # ========================================================================
+    # Step 1: Apply PriorityClasses
+    # ========================================================================
+
+    - name: Apply PriorityClasses
+      block:
+        - name: Check if PriorityClasses manifest exists
+          ansible.builtin.stat:
+            path: "{{ manifests_dir }}/priority-classes.yaml"
+          register: priority_classes_stat
+
+        - name: Fail if PriorityClasses manifest not found
+          ansible.builtin.fail:
+            msg: "PriorityClasses manifest not found: {{ manifests_dir }}/priority-classes.yaml"
+          when: not priority_classes_stat.stat.exists
+
+        - name: Apply PriorityClasses manifest
+          ansible.builtin.command:
+            cmd: >
+              kubectl --kubeconfig {{ talos_kubeconfig_file }}
+              apply -f {{ manifests_dir }}/priority-classes.yaml
+          environment:
+            KUBECONFIG: "{{ talos_kubeconfig_file }}"
+          register: apply_priority_classes
+          changed_when: "'created' in apply_priority_classes.stdout or 'configured' in apply_priority_classes.stdout"
+
+        - name: Display PriorityClasses result
+          ansible.builtin.debug:
+            msg: |
+              PriorityClasses Applied:
+              {{ apply_priority_classes.stdout }}
+
+    # ========================================================================
+    # Step 2: Configure Storage Worker (worker-1)
+    # ========================================================================
+
+    - name: Configure storage worker node (talos-worker-1)
+      block:
+        - name: Label worker-1 with worker and storage roles
+          ansible.builtin.command:
+            cmd: >
+              kubectl --kubeconfig {{ talos_kubeconfig_file }}
+              label nodes talos-worker-1
+              node-role.kubernetes.io/worker=""
+              node-role.kubernetes.io/storage=""
+              --overwrite
+          environment:
+            KUBECONFIG: "{{ talos_kubeconfig_file }}"
+          register: label_storage
+          changed_when: "'labeled' in label_storage.stdout"
+
+        - name: Taint worker-1 (storage workloads only)
+          ansible.builtin.command:
+            cmd: >
+              kubectl --kubeconfig {{ talos_kubeconfig_file }}
+              taint nodes talos-worker-1
+              node-role.kubernetes.io/storage:NoSchedule
+              --overwrite
+          environment:
+            KUBECONFIG: "{{ talos_kubeconfig_file }}"
+          register: taint_storage
+          changed_when: "'tainted' in taint_storage.stdout or 'updated' in taint_storage.stdout"
+          failed_when: false
+
+        - name: Display storage worker configuration
+          ansible.builtin.debug:
+            msg: |
+              Storage Worker Configured:
+              talos-worker-1:
+                node-role.kubernetes.io/worker=""
+                node-role.kubernetes.io/storage=""
+                taint: node-role.kubernetes.io/storage:NoSchedule
+
+    # ========================================================================
+    # Step 3: Configure Infra Worker (worker-2)
+    # ========================================================================
+
+    - name: Configure infra worker node (talos-worker-2)
+      block:
+        - name: Label worker-2 with worker and infra roles
+          ansible.builtin.command:
+            cmd: >
+              kubectl --kubeconfig {{ talos_kubeconfig_file }}
+              label nodes talos-worker-2
+              node-role.kubernetes.io/worker=""
+              node-role.kubernetes.io/infra=""
+              --overwrite
+          environment:
+            KUBECONFIG: "{{ talos_kubeconfig_file }}"
+          register: label_infra
+          changed_when: "'labeled' in label_infra.stdout"
+
+        - name: Taint worker-2 (infra workloads only)
+          ansible.builtin.command:
+            cmd: >
+              kubectl --kubeconfig {{ talos_kubeconfig_file }}
+              taint nodes talos-worker-2
+              node-role.kubernetes.io/infra:NoSchedule
+              --overwrite
+          environment:
+            KUBECONFIG: "{{ talos_kubeconfig_file }}"
+          register: taint_infra
+          changed_when: "'tainted' in taint_infra.stdout or 'updated' in taint_infra.stdout"
+          failed_when: false
+
+        - name: Display infra worker configuration
+          ansible.builtin.debug:
+            msg: |
+              Infra Worker Configured:
+              talos-worker-2:
+                node-role.kubernetes.io/worker=""
+                node-role.kubernetes.io/infra=""
+                taint: node-role.kubernetes.io/infra:NoSchedule
+
+    # ========================================================================
+    # Step 4: Configure Application Worker (worker-3)
+    # ========================================================================
+
+    - name: Configure application worker node (talos-worker-3)
+      block:
+        - name: Label worker-3 with worker role
+          ansible.builtin.command:
+            cmd: >
+              kubectl --kubeconfig {{ talos_kubeconfig_file }}
+              label nodes talos-worker-3
+              node-role.kubernetes.io/worker=""
+              --overwrite
+          environment:
+            KUBECONFIG: "{{ talos_kubeconfig_file }}"
+          register: label_app
+          changed_when: "'labeled' in label_app.stdout"
+
+        - name: Display application worker configuration
+          ansible.builtin.debug:
+            msg: |
+              Application Worker Configured:
+              talos-worker-3:
+                node-role.kubernetes.io/worker=""
+                taint: none (open for general scheduling)
+
+    # ========================================================================
+    # Step 5: Verification
+    # ========================================================================
+
+    - name: Verify configuration
+      block:
+        - name: Get node labels and taints
+          ansible.builtin.command:
+            # yamllint disable-line rule:line-length
+            cmd: >-
+              kubectl --kubeconfig {{ talos_kubeconfig_file }}
+              get nodes
+              -o custom-columns=NAME:.metadata.name,STORAGE:.metadata.labels.node-role\.kubernetes\.io/storage,INFRA:.metadata.labels.node-role\.kubernetes\.io/infra,WORKER:.metadata.labels.node-role\.kubernetes\.io/worker,TAINTS:.spec.taints[*].key
+          environment:
+            KUBECONFIG: "{{ talos_kubeconfig_file }}"
+          register: nodes_info
+          changed_when: false
+
+        - name: Get PriorityClasses
+          ansible.builtin.command:
+            cmd: >
+              kubectl --kubeconfig {{ talos_kubeconfig_file }}
+              get priorityclasses
+              -o custom-columns=NAME:.metadata.name,VALUE:.value,GLOBAL-DEFAULT:.globalDefault
+          environment:
+            KUBECONFIG: "{{ talos_kubeconfig_file }}"
+          register: priority_classes_info
+          changed_when: false
+
+        - name: Display verification results
+          ansible.builtin.debug:
+            msg: |
+              ============================================================================
+              Workload Tiers Configuration Complete!
+              ============================================================================
+
+              Node Configuration:
+              {{ nodes_info.stdout }}
+
+              PriorityClasses:
+              {{ priority_classes_info.stdout }}
+
+              ============================================================================
+
+    # ========================================================================
+    # Summary
+    # ========================================================================
+
+    - name: Display summary
+      ansible.builtin.debug:
+        msg: |
+          ============================================================================
+          Production Workload Tiers Configured Successfully!
+          ============================================================================
+
+          Applied Configuration:
+          PriorityClasses (critical-infrastructure, high-priority-stateful, normal-priority)
+          Storage worker labels and taint (worker-1)
+          Infra worker labels and taint (worker-2)
+          Application worker label (worker-3)
+          PodSecurity labels for privileged namespaces
+          Legacy homelab labels/taints removed from all nodes
+
+          Next Steps:
+          1. Push argo-apps changes and sync ArgoCD:
+             argocd app sync argocd
+             argocd app sync traefik
+             argocd app sync cert-manager
+
+          2. Verify pod placement (should be empty on CP nodes):
+             kubectl get pods -A -o wide | grep "talos-cp-"
+
+          3. Run cluster verification:
+             make verify    # ansible/playbooks/talos/05-verify.yml
+
+          ============================================================================

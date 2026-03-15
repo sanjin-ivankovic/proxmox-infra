@@ -1,0 +1,24 @@
+---
+# playbooks/linux-vms/08-shutdown.yml
+# Graceful shutdown of Linux VMs
+
+- name: Graceful Shutdown Linux VMs
+  hosts: all
+  become: true
+  gather_facts: true
+  tags: [shutdown]
+
+  vars:
+    shutdown_delay: 1
+
+  tasks:
+    - name: Shutdown host
+      ansible.builtin.command: shutdown -h +{{ shutdown_delay }} "System shutting down via Ansible"
+      async: 0
+      poll: 0
+      changed_when: true
+      failed_when: false
+
+    - name: Display shutdown confirmation
+      ansible.builtin.debug:
+        msg: 'Shutdown initiated for {{ inventory_hostname }} (scheduled in {{ shutdown_delay }} minute)'

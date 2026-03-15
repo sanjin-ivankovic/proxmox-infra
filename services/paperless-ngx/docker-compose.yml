@@ -1,0 +1,80 @@
+---
+# Paperless-NGX Document Management System
+# Open-source document management system for digitizing and organizing documents
+#
+# Deployment: Auto-deployed via GitLab CI/CD on push to main
+# Web UI: http://<host-ip>:8080
+
+services:
+  broker:
+    image: docker.io/library/redis:8.6.1@sha256:1c054d54ecd1597bba52f4304bca5afbc5565ebe614c5b3d7dc5b7f8a0cd768d
+    restart: unless-stopped
+    volumes:
+      - ${APPDATA_DIR}/redis/data:/data
+  db:
+    image: docker.io/library/postgres:18.3@sha256:69e8582b781cb44fa4557b98ed586fe68361e320d9b12f9707494335634f4f3d
+    restart: unless-stopped
+    volumes:
+      - ${APPDATA_DIR}/postgres/data:/var/lib/postgresql
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+  webserver:
+    image: ghcr.io/paperless-ngx/paperless-ngx:2.20.3@sha256:57ad9565bff3bdf2378ab1dcc21ea649dfd68ee58e0eeca2bfba0120a26563e8
+    restart: unless-stopped
+    depends_on:
+      - db
+      - broker
+    ports:
+      - '8080:8000'
+    volumes:
+      - ${APPDATA_DIR}/paperless-ngx/data:/usr/src/paperless/data
+      - ${APPDATA_DIR}/paperless-ngx/media:/usr/src/paperless/media
+      - ${APPDATA_DIR}/paperless-ngx/export:/usr/src/paperless/export
+      - ${APPDATA_DIR}/paperless-ngx/consume:/usr/src/paperless/consume
+    environment:
+      USERMAP_UID: ${USERMAP_UID}
+      USERMAP_GID: ${USERMAP_GID}
+      PAPERLESS_REDIS: redis://broker:6379
+      PAPERLESS_DBHOST: db
+      PAPERLESS_DBENGINE: postgresql
+      PAPERLESS_DBNAME: ${POSTGRES_DB}
+      PAPERLESS_DBUSER: ${POSTGRES_USER}
+      PAPERLESS_DBPASS: ${POSTGRES_PASSWORD}
+      PAPERLESS_URL: ${PAPERLESS_URL}
+      PAPERLESS_SECRET_KEY: ${PAPERLESS_SECRET_KEY}
+      PAPERLESS_TIME_ZONE: ${PAPERLESS_TIME_ZONE}
+      PAPERLESS_OCR_LANGUAGE: ${PAPERLESS_OCR_LANGUAGE}
+      PAPERLESS_OCR_LANGUAGES: ${PAPERLESS_OCR_LANGUAGES}
+      PAPERLESS_ADMIN_USER: ${PAPERLESS_ADMIN_USER}
+      PAPERLESS_ADMIN_MAIL: ${PAPERLESS_ADMIN_MAIL}
+      PAPERLESS_ADMIN_PASSWORD: ${PAPERLESS_ADMIN_PASSWORD}
+  paperless-ai:
+    image: docker.io/clusterzx/paperless-ai:3.0.9@sha256:2b65888163fd59716f1c8285b31c5bd0b30c9c3c192c42b516688e3887d4ba60
+    restart: unless-stopped
+    depends_on:
+      - webserver
+    security_opt:
+      - no-new-privileges:true
+    ports:
+      - '3000:3000'
+    volumes:
+      - ${APPDATA_DIR}/paperless-ai/data:/app/data
+    environment:
+      PUID: ${USERMAP_UID}
+      PGID: ${USERMAP_GID}
+      PAPERLESS_API_URL: http://webserver:8000/api
+      PAPERLESS_API_TOKEN: ${PAPERLESS_AI_API_TOKEN}
+      AI_PROVIDER: ${AI_PROVIDER}
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      OPENAI_MODEL: ${OPENAI_MODEL}
+      OLLAMA_API_URL: ${OLLAMA_API_URL}
+      OLLAMA_MODEL: ${OLLAMA_MODEL}
+      CUSTOM_API_KEY: ${CUSTOM_API_KEY}
+      CUSTOM_BASE_URL: ${CUSTOM_BASE_URL}
+      CUSTOM_MODEL: ${CUSTOM_MODEL}
+      SCAN_INTERVAL: ${PAPERLESS_AI_SCAN_INTERVAL}
+      PROCESS_PREDEFINED_DOCUMENTS: ${PAPERLESS_AI_PROCESS_PREDEFINED}
+      ADD_AI_PROCESSED_TAG: ${PAPERLESS_AI_ADD_TAG}
+      TAGS: ${PAPERLESS_AI_TAGS}

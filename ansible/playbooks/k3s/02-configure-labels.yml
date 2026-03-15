@@ -1,0 +1,85 @@
+---
+- name: Apply standardized node labels to K3s cluster
+  hosts: masters[0]
+  gather_facts: false
+  tasks:
+    - name: Wait for cluster to be ready
+      ansible.builtin.command: kubectl get nodes
+      register: nodes_status
+      retries: 5
+      delay: 10
+      until: nodes_status.rc == 0
+      changed_when: false
+
+    - name: Label control plane (master) nodes
+      ansible.builtin.command: >
+        kubectl label nodes {{ item }}
+        workload.homelab/tier=infrastructure
+        workload.homelab/storage-capable=false
+        workload.homelab/role=control-plane
+        workload-tier=infrastructure
+        --overwrite
+      loop: "{{ groups['masters'] }}"
+      register: label_result
+      changed_when: "'labeled' in label_result.stdout"
+      failed_when:
+        - label_result.rc != 0
+        - "'already has' not in label_result.stderr"
+
+    - name: Label stateful worker node (worker-1)
+      ansible.builtin.command: >
+        kubectl label nodes {{ groups['workers'][0] }}
+        workload.homelab/tier=stateful
+        workload.homelab/storage-capable=true
+        workload.homelab/role=worker
+        workload-tier=stateful
+        --overwrite
+      register: label_result
+      changed_when: "'labeled' in label_result.stdout"
+      failed_when:
+        - label_result.rc != 0
+        - "'already has' not in label_result.stderr"
+
+    - name: Label stateless worker nodes (workers 2-3)
+      ansible.builtin.command: >
+        kubectl label nodes {{ item }}
+        workload.homelab/tier=stateless
+        workload.homelab/storage-capable=false
+        workload.homelab/role=worker
+        workload-tier=stateless
+        --overwrite
+      loop: "{{ groups['workers'][1:] }}"
+      register: label_result
+      changed_when: "'labeled' in label_result.stdout"
+      failed_when:
+        - label_result.rc != 0
+        - "'already has' not in label_result.stderr"
+
+    - name: Verify node labels
+      ansible.builtin.command: kubectl get nodes --show-labels
+      register: node_labels
+      changed_when: false
+
+    - name: Display node labels
+      ansible.builtin.debug:
+        msg: '{{ node_labels.stdout_lines }}'
+
+    - name: Verify generic workload-tier label (backward compatibility)
+      ansible.builtin.shell: |
+        set -o pipefail
+        kubectl get nodes -l workload-tier --no-headers | wc -l
+      args:
+        executable: /bin/bash
+      register: old_label_count
+      changed_when: false
+      failed_when: old_label_count.stdout | int != groups['all'] | length
+
+    - name: Verify homelab tier label (new schema)
+      ansible.builtin.shell: |
+        set -o pipefail
+        kubectl get nodes -l workload.homelab/tier --no-headers | wc -l
+      args:
+        executable: /bin/bash
+      register: new_label_count
+      changed_when: false
+      failed_when: new_label_count.stdout | int != groups['all'] | length

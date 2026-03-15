@@ -1,0 +1,46 @@
+---
+# roles/k3s_cluster_cluster/tasks/main.yml
+
+# Run preflight checks to verify system requirements before installation
+- name: Include preflight checks
+  ansible.builtin.include_tasks: 01-preflight.yml
+  tags: [preflight, bootstrap]
+
+# Install and configure K3s server components on control plane nodes
+- name: Include first master setup
+  ansible.builtin.include_tasks: 02-first-master.yml
+  when:
+    - inventory_hostname == groups['masters'][0]
+    - "'masters' in group_names"
+  tags: [master, first-master, bootstrap]
+
+# Install and configure K3s server components on additional control plane nodes
+- name: Include additional masters setup
+  ansible.builtin.include_tasks: 03-additional-masters.yml
+  when:
+    - inventory_hostname != groups['masters'][0]
+    - "'masters' in group_names"
+  tags: [master, additional-masters, bootstrap]
+
+# Configure kubeconfig for K3s on control plane nodes
+- name: Include kubeconfig setup
+  ansible.builtin.include_tasks: 04-kubeconfig.yml
+  when: "'masters' in group_names"
+  tags: [kubeconfig, bootstrap]
+
+# Install and configure K3s agent components on worker nodes
+- name: Include worker setup
+  ansible.builtin.include_tasks: 05-worker.yml
+  when: "'workers' in group_names"
+  tags: [worker, bootstrap]
+
+# Verify cluster status after installation
+- name: Include cluster verification
+  ansible.builtin.include_tasks: 06-verify.yml
+  when: "'masters' in group_names"
+  tags: [verify, bootstrap]
+
+# Update K3s to the desired version if necessary
+- name: Include K3s update tasks
+  ansible.builtin.include_tasks: 07-update.yml
+  tags: [update]

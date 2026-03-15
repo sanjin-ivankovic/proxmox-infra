@@ -1,0 +1,91 @@
+---
+# playbooks/k3s/startup.yml
+# Cluster Recovery Playbook
+# Starts up the K3s cluster after a full shutdown (e.g., power loss or maintenance)
+
+- name: Start K3s on Masters (Infrastructure Tier)
+  hosts: masters
+  become: true
+  serial: 1
+  tasks:
+    - name: Start K3s service
+      ansible.builtin.systemd:
+        name: k3s
+        state: started
+        enabled: true
+      register: k3s_start
+
+    - name: Wait for K3s API
+      ansible.builtin.wait_for:
+        port: 6443
+        host: "{{ ansible_host }}"
+        delay: 5
+        timeout: 300
+      when: k3s_start.changed
+      tags: [skip_ansible_lint] # Suppress no-handler warning as this is sequential logic
+
+- name: Start K3s Agent on Workers
+  hosts: workers
+  become: true
+  serial: 2
+  tasks:
+    - name: Start K3s Agent service
+      ansible.builtin.systemd:
+        name: k3s-agent
+        state: started
+        enabled: true
+
+- name: Verify Cluster Health
+  hosts: masters[0]
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Wait for all nodes to be Ready
+      ansible.builtin.shell: |
+        set -o pipefail
+        kubectl get nodes --no-headers | grep -v " Ready " | wc -l
+      args:
+        executable: /bin/bash
+      environment:
+        KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+      register: not_ready_count
+      until: not_ready_count.stdout | int == 0
+      retries: 60
+      delay: 10
+      changed_when: false
+
+    - name: Uncordon all nodes (if they were drained)
+      ansible.builtin.shell: |
+        set -o pipefail
+        kubectl get nodes -o name | xargs -I {} kubectl uncordon {}
+      args:
+        executable: /bin/bash
+      environment:
+        KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+      failed_when: false
+      changed_when: true
+
+    - name: Check system pods
+      ansible.builtin.shell: |
+        set -o pipefail
+        kubectl get pods -n kube-system --field-selector=status.phase!=Running,status.phase!=Succeeded --no-headers | wc -l
+      args:
+        executable: /bin/bash
+      environment:
+        KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+      register: unhealthy_system_pods
+      changed_when: false
+
+    - name: Display Startup Summary
+      ansible.builtin.debug:
+        msg: |
+          ✅ Cluster Startup Complete
+          - All master nodes started
+          - All worker nodes started
+          - All nodes are Ready
+          - Nodes uncordoned
+          - System unhealthy pods: {{ unhealthy_system_pods.stdout }}
+
+          Next steps:
+          1. Run 'make verify' to run full health check
+          2. Check your applications

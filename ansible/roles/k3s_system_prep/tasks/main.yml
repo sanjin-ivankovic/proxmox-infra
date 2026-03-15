@@ -1,0 +1,38 @@
+---
+# roles/k3s_system_prep/tasks/main.yml
+
+# Install required system packages to prepare for K3s
+- name: Include OS packages
+  ansible.builtin.include_tasks: 01-packages.yml
+  tags: [packages]
+
+# Install Python pip for managing Python dependencies
+- name: Include pip and Kubernetes Python client setup
+  ansible.builtin.include_tasks: 02-pip-client.yml
+  tags: [pip]
+
+# Disable swap which is required for Kubernetes
+- name: Include swap disabling
+  ansible.builtin.include_tasks: 03-disable-swap.yml
+  tags: [swap]
+
+# Apply sysctl settings for system performance tuning
+- name: Include sysctl tuning
+  ansible.builtin.include_tasks: 04-sysctl.yml
+  tags: [sysctl]
+
+# Setup network configuration for Kubernetes networking
+- name: Include networking setup
+  ansible.builtin.include_tasks: 05-networking.yml
+  tags: [networking]
+
+# Configure firewall rules to allow K3s traffic
+- name: Include firewall configuration
+  ansible.builtin.include_tasks: 06-firewall.yml
+  when: k3s_system_prep_configure_firewall | bool
+  tags: [firewall]
+
+# Setup bash aliases
+- name: Include bash aliases
+  ansible.builtin.include_tasks: 07-bash-aliases.yml
+  tags: [bash-aliases]

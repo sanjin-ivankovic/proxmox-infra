@@ -1,0 +1,84 @@
+---
+# ============================================================================
+# Gracefully Shutdown Talos Cluster
+# ============================================================================
+# Shuts down all Talos nodes gracefully via the API.
+# Workers are shut down first, then control planes.
+# Use before Proxmox host maintenance.
+#
+# Usage:
+#   cd /home/user/projects/proxmox-infra/ansible/talos
+#   make shutdown
+# ============================================================================
+
+- name: Shutdown Talos worker nodes first
+  hosts: workers
+  gather_facts: false
+  become: false  # Talos uses API - no privilege escalation needed
+  connection: local
+  serial: 1 # Shutdown workers one at a time
+
+  tasks:
+    - name: Shutdown worker node via Talos API - {{ inventory_hostname }}
+      ansible.builtin.command:
+        cmd: >
+          talosctl shutdown
+          --talosconfig {{ talos_config_file }}
+          --nodes {{ ansible_host }}
+          --endpoints {{ ansible_host }}
+          --timeout 120s
+      environment:
+        TALOSCONFIG: "{{ talos_config_file }}"
+      register: shutdown_result
+      changed_when: shutdown_result.rc == 0
+      failed_when: false
+      delegate_to: localhost
+
+    - name: Wait for worker node to stop responding
+      ansible.builtin.wait_for:
+        host: "{{ ansible_host }}"
+        port: 50000
+        state: stopped
+        timeout: 120
+      delegate_to: localhost
+      failed_when: false
+
+    - name: Display shutdown status
+      ansible.builtin.debug:
+        msg: "✓ {{ inventory_hostname }} (worker) shut down"
+
+- name: Shutdown Talos control plane nodes
+  hosts: controlplane
+  gather_facts: false
+  become: false  # Talos uses API - no privilege escalation needed
+  connection: local
+  serial: 1 # Shutdown control planes one at a time
+
+  tasks:
+    - name: Shutdown control plane node via Talos API - {{ inventory_hostname }}
+      ansible.builtin.command:
+        cmd: >
+          talosctl shutdown
+          --talosconfig {{ talos_config_file }}
+          --nodes {{ ansible_host }}
+          --endpoints {{ ansible_host }}
+          --timeout 120s
+      environment:
+        TALOSCONFIG: "{{ talos_config_file }}"
+      register: shutdown_result
+      changed_when: shutdown_result.rc == 0
+      failed_when: false
+      delegate_to: localhost
+
+    - name: Wait for control plane node to stop responding
+      ansible.builtin.wait_for:
+        host: "{{ ansible_host }}"
+        port: 50000
+        state: stopped
+        timeout: 120
+      delegate_to: localhost
+      failed_when: false
+
+    - name: Display shutdown status
+      ansible.builtin.debug:
+        msg: "✓ {{ inventory_hostname }} (control plane) shut down"

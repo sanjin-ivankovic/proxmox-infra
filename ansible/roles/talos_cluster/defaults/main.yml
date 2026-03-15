@@ -1,0 +1,33 @@
+---
+# ============================================================================
+# Talos Cluster Role - Default Variables
+# ============================================================================
+# NOTE: Cluster-specific variables (versions, IPs, node specs) are defined
+#       in group_vars/all/vars.yml as the single source of truth.
+#       This file only contains operational parameters.
+# ============================================================================
+
+# ==============================================================================
+# Operational Timeouts & Retry Configuration
+# ==============================================================================
+
+# API wait timeout (seconds)
+talos_cluster_api_timeout: 300
+talos_cluster_api_delay: 20
+talos_cluster_api_port: 50000
+
+# Bootstrap wait timeout (seconds)
+talos_cluster_bootstrap_timeout: 600
+
+# Node ready timeout (seconds)
+talos_cluster_node_ready_timeout: 300
+
+# Health check wait timeout (duration string)
+talos_cluster_health_wait_timeout: '5m'
+
+# ==============================================================================
+# Feature Flags
+# ==============================================================================
+
+# Whether to check kubeconfig existence in check_configs task
+talos_cluster_check_kubeconfig: false

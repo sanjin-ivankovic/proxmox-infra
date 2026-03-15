@@ -1,0 +1,22 @@
+---
+# ============================================================================
+# Talos Cluster Role - Main Tasks
+# ============================================================================
+# This role provides reusable task files for Talos operations.
+# Instead of applying this role directly, playbooks should include specific
+# task files as needed.
+#
+# Available task files:
+#   - check_talosctl.yml: Validate talosctl is installed
+#   - check_configs.yml: Validate talosconfig/kubeconfig exist
+#   - health_check.yml: Parameterized node health check
+#   - wait_for_api.yml: Wait for Talos API on a specific node
+#
+# Usage in playbooks:
+#   - ansible.builtin.include_role:
+#       name: talos_cluster
+#       tasks_from: check_talosctl
+# ============================================================================
+
+- name: Include check_talosctl tasks by default
+  ansible.builtin.include_tasks: check_talosctl.yml

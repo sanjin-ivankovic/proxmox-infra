@@ -1,0 +1,73 @@
+---
+# playbooks/k3s/maintenance-mode.yml
+# Toggle Maintenance Mode for a Node
+# Usage: make maintenance-mode HOST=k3s-worker-1 STATE=enable|disable
+
+- name: Manage Node Maintenance Mode
+  hosts: masters[0]
+  become: true
+  gather_facts: false
+  vars:
+    # Defaults
+    target_node: ""
+    state: "enable" # enable or disable
+  tasks:
+    - name: Validate arguments
+      ansible.builtin.fail:
+        msg: |
+          Missing required arguments.
+          Usage: make maintenance-mode HOST=<hostname> STATE=<enable|disable>
+      when: target_node == "" or state not in ["enable", "disable"]
+
+    # ENABLE MAINTENANCE
+    - name: Enable maintenance mode
+      when: state == "enable"
+      block:
+        - name: Cordon node
+          ansible.builtin.command: kubectl cordon {{ target_node }}
+          environment:
+            KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+          changed_when: true
+
+        - name: Drain node
+          ansible.builtin.command: >
+            kubectl drain {{ target_node }}
+            --ignore-daemonsets
+            --delete-emptydir-data
+            --grace-period=120
+            --timeout=15m
+            --disable-eviction
+            --force
+          environment:
+            KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+          register: drain_result
+          failed_when: false
+          changed_when: true
+
+        - name: Add maintenance label
+          ansible.builtin.command: kubectl label node {{ target_node }} maintenance=true --overwrite
+          environment:
+            KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+          changed_when: true
+
+    # DISABLE MAINTENANCE
+    - name: Disable maintenance mode
+      when: state == "disable"
+      block:
+        - name: Uncordon node
+          ansible.builtin.command: kubectl uncordon {{ target_node }}
+          environment:
+            KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+          changed_when: true
+
+        - name: Remove maintenance label
+          ansible.builtin.command: kubectl label node {{ target_node }} maintenance-
+          environment:
+            KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+          changed_when: true
+          failed_when: false
+
+    - name: Summary
+      ansible.builtin.debug:
+        msg: |
+          Maintenance mode for {{ target_node }} is now: {{ 'ENABLED' if state == 'enable' else 'DISABLED' }}

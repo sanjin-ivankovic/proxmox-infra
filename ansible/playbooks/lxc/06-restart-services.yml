@@ -1,0 +1,33 @@
+---
+# playbooks/lxc/restart-services.yml
+# Restart critical services on LXC containers
+
+- name: Restart Services
+  hosts: all
+  become: true
+  gather_facts: true
+  vars:
+    ansible_user: maintainer
+    restart_docker: true
+
+  tasks:
+    - name: Check if Docker is installed
+      ansible.builtin.command: which docker
+      register: docker_installed
+      ignore_errors: true
+      changed_when: false
+
+    - name: Restart Docker
+      ansible.builtin.systemd:
+        name: docker
+        state: restarted
+      when:
+        - restart_docker
+        - docker_installed.rc == 0
+      register: docker_restart
+
+    - name: Display restart status
+      ansible.builtin.debug:
+        msg:
+          - '✓ Services restarted for {{ inventory_hostname }}'
+          - "  • Docker: {{ 'Restarted' if docker_restart.changed else 'Skipped/Not Installed' }}"

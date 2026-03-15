@@ -1,0 +1,83 @@
+---
+# ============================================================================
+# Upgrade Kubernetes Version
+# ============================================================================
+# Upgrades Kubernetes control plane components and kubelet via talosctl.
+# Run this after Talos OS is already on the desired version.
+#
+# Usage:
+#   make upgrade-k8s  # Will prompt for version
+#   OR
+#   ansible-playbook -i inventory/hosts.yml 08-upgrade-k8s.yml -e "kubernetes_version=v1.35.0"
+# ============================================================================
+
+- name: Upgrade Kubernetes
+  hosts: controlplane
+  gather_facts: false
+  become: false
+  connection: local
+  run_once: true
+
+  tasks:
+    - name: Fail if kubernetes_version not specified
+      ansible.builtin.fail:
+        msg: "kubernetes_version variable required (e.g., -e 'kubernetes_version=v1.35.0')"
+      when: kubernetes_version is not defined
+
+    - name: Show upgrade plan (dry-run)
+      ansible.builtin.command:
+        cmd: >
+          talosctl upgrade-k8s
+          --talosconfig {{ talos_config_file }}
+          --nodes {{ ansible_host }}
+          --endpoints {{ ansible_host }}
+          --to {{ kubernetes_version | regex_replace('^v', '') }}
+          --dry-run
+      environment:
+        TALOSCONFIG: '{{ talos_config_file }}'
+      register: dry_run
+      changed_when: false
+      async: 1800
+      poll: 15
+      delegate_to: localhost
+
+    - name: Display upgrade plan
+      ansible.builtin.debug:
+        msg: "{{ dry_run.stdout_lines }}"
+
+    - name: Upgrade Kubernetes control plane and kubelets
+      ansible.builtin.command:
+        cmd: >
+          talosctl upgrade-k8s
+          --talosconfig {{ talos_config_file }}
+          --nodes {{ ansible_host }}
+          --endpoints {{ ansible_host }}
+          --to {{ kubernetes_version | regex_replace('^v', '') }}
+      environment:
+        TALOSCONFIG: '{{ talos_config_file }}'
+      register: upgrade_result
+      changed_when: upgrade_result.rc == 0
+      async: 1800
+      poll: 15
+      delegate_to: localhost
+
+    - name: Display upgrade output
+      ansible.builtin.debug:
+        msg: "{{ upgrade_result.stdout_lines }}"
+
+    - name: Verify nodes are Ready after upgrade
+      ansible.builtin.command:
+        cmd: kubectl --kubeconfig {{ talos_kubeconfig_file }} get nodes -o wide
+      environment:
+        KUBECONFIG: '{{ talos_kubeconfig_file }}'
+      register: nodes
+      changed_when: false
+      delegate_to: localhost
+
+    - name: Display node status
+      ansible.builtin.debug:
+        msg: "{{ nodes.stdout_lines }}"
+
+    - name: Kubernetes upgrade complete
+      ansible.builtin.debug:
+        msg: "Kubernetes upgraded to {{ kubernetes_version }}"

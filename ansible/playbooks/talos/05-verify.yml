@@ -1,0 +1,92 @@
+---
+# ============================================================================
+# Verify Talos Cluster Health
+# ============================================================================
+# This playbook verifies the health and readiness of the Talos cluster.
+#
+# Prerequisites:
+#   - talosctl installed
+#   - Cluster bootstrapped
+#
+# Usage:
+#   cd /home/user/projects/proxmox-infra/ansible/talos
+#   make verify
+# ============================================================================
+
+- name: Verify Talos cluster health
+  hosts: talos
+  gather_facts: false
+  become: false  # Talos uses API - no privilege escalation needed
+  connection: local
+
+  tasks:
+    - name: Check Talos node health
+      ansible.builtin.command:
+        cmd: >
+          talosctl health
+          --talosconfig {{ talos_config_file }}
+          --nodes {{ ansible_host }}
+          --endpoints {{ ansible_host }}
+      environment:
+        TALOSCONFIG: "{{ talos_config_file }}"
+      register: health_result
+      changed_when: false
+      failed_when: false
+      delegate_to: localhost
+
+    - name: Display node health
+      ansible.builtin.debug:
+        msg: |
+          Node: {{ inventory_hostname }} ({{ ansible_host }})
+          Status: {{ 'Healthy ✓' if health_result.rc == 0 else 'Unhealthy ✗' }}
+          {{ health_result.stdout if health_result.stdout else health_result.stderr }}
+
+- name: Verify Kubernetes cluster
+  hosts: localhost
+  gather_facts: false
+  become: false  # Talos uses API - no privilege escalation needed
+
+  tasks:
+    - name: Get cluster nodes
+      ansible.builtin.command:
+        cmd: kubectl --kubeconfig {{ talos_kubeconfig_file }} get nodes -o wide
+      environment:
+        KUBECONFIG: "{{ talos_kubeconfig_file }}"
+      register: nodes
+      changed_when: false
+      failed_when: false
+
+    - name: Display cluster nodes
+      ansible.builtin.debug:
+        msg: |
+          ============================================================================
+          Kubernetes Nodes:
+          ============================================================================
+          {{ nodes.stdout if nodes.rc == 0 else 'Failed to get nodes' }}
+
+    - name: Get system pods
+      ansible.builtin.command:
+        cmd: kubectl --kubeconfig {{ talos_kubeconfig_file }} get pods -n kube-system
+      environment:
+        KUBECONFIG: "{{ talos_kubeconfig_file }}"
+      register: pods
+      changed_when: false
+      failed_when: false
+
+    - name: Display system pods
+      ansible.builtin.debug:
+        msg: |
+          ============================================================================
+          System Pods:
+          ============================================================================
+          {{ pods.stdout if pods.rc == 0 else 'Failed to get pods' }}
+
+    - name: Summary
+      ansible.builtin.debug:
+        msg: |
+          ============================================================================
+          ✓ Cluster verification complete!
+          ============================================================================
+
+          Next: Deploy infrastructure components (CNI, storage, ingress)
+          ============================================================================

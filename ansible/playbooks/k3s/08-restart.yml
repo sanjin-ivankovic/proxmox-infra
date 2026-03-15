@@ -1,0 +1,29 @@
+---
+# playbooks/restart-k3s.yml
+# Restart K3s services on all nodes without rebooting
+
+- name: Restart K3s on all masters
+  hosts: masters
+  become: true
+  remote_user: maintainer  # Use non-root user (root login disabled after bootstrap)
+  serial: 1
+  tasks:
+    - name: Restart K3s service
+      ansible.builtin.systemd:
+        name: k3s
+        state: restarted
+
+    - name: Wait for API server
+      ansible.builtin.wait_for:
+        port: 6443
+        timeout: 300
+
+- name: Restart K3s agent on workers
+  hosts: workers
+  become: true
+  remote_user: maintainer  # Use non-root user (root login disabled after bootstrap)
+  tasks:
+    - name: Restart K3s agent
+      ansible.builtin.systemd:
+        name: k3s-agent
+        state: restarted
