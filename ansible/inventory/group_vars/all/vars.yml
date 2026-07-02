@@ -1,0 +1,14 @@
+---
+# ansible/inventory/group_vars/all/vars.yml
+# Global variables for all hosts
+
+# Steady-state connection user (post-bootstrap). The dynamic inventory also
+# emits this as each host's ansible_user; defined here once as the single
+# source of truth for roles that consume `user` (e.g. common_users,
+# common_docker).
+user: maintainer
+
+# Komodo Core's address on the homelab network (the `komodo` LXC). Periphery
+# agents restrict inbound connections to this IP, so it lives here as the single
+# source of truth rather than being hardcoded in the komodo_periphery role.
+komodo_core_ip: "10.40.0.14"

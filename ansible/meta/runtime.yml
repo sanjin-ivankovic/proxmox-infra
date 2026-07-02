@@ -1,0 +1,6 @@
+---
+# Collection-level runtime metadata for homelab.proxmox.
+# ansible-core floor: the roles use argument_specs (2.11+), block-level
+# constructs, and modern fact namespacing; 2.15 is a comfortable, well-supported
+# baseline matching the control machine + CI image.
+requires_ansible: ">=2.15.0"

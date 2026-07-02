@@ -1,0 +1,11 @@
+---
+# ansible/inventory/host_vars/gitlab.yml
+# Host-local config + Komodo periphery secrets for gitlab. Real values live ONLY
+# here (rendered into the host's periphery.config.toml), referenced from the
+# stack in komodo/stacks.toml as [[NAME]].
+# Add the matching vault_gitlab_* keys via `make -C ansible vault-edit`.
+
+komodo_periphery_secrets:
+  # First-boot root password seed for GitLab CE.
+  GITLAB_ROOT_PASSWORD: "{{ vault_gitlab_root_password }}"
+  # GITLAB_SMTP_PASSWORD: "{{ vault_gitlab_smtp_password }}"  # if SMTP is wired

@@ -1,0 +1,69 @@
+---
+# Argument specification for the komodo_periphery role.
+# Defaults here MUST match defaults/main.yml.
+argument_specs:
+  main:
+    short_description: Install the Komodo Periphery agent on a Docker host
+    description:
+      - Installs the Periphery binary and systemd unit and renders
+        periphery.config.toml. Core drives this agent to deploy compose stacks.
+      - Inbound is restricted to Komodo Core; host-local secrets are exposed to
+        stacks via [[NAME]] interpolation and never leave the host.
+    author:
+      - Maintainer Name
+    options:
+      komodo_periphery_version:
+        type: str
+        required: false
+        default: "2.2.0"
+        description:
+          - Periphery release to install (no leading "v"). Use "latest" only for
+            a deliberate one-off test.
+      komodo_periphery_root_dir:
+        type: path
+        required: false
+        default: /etc/komodo
+        description: Agent root directory (holds config + generated keys).
+      komodo_periphery_port:
+        type: int
+        required: false
+        default: 8120
+        description: Port the agent listens on.
+      komodo_periphery_bind_ip:
+        type: str
+        required: false
+        default: "[::]"
+        description: Bind address for the listener.
+      komodo_periphery_ssl_enabled:
+        type: bool
+        required: false
+        default: true
+        description: Whether the agent serves over TLS.
+      komodo_periphery_allowed_ips:
+        type: list
+        elements: str
+        required: false
+        default:
+          - "{{ komodo_core_ip | default('10.40.0.14') }}"
+        description:
+          - IPs allowed to connect (Komodo Core only). Defaults to the
+            inventory-wide C(komodo_core_ip).
+      komodo_periphery_core_public_keys:
+        type: str
+        required: false
+        default: "{{ vault_komodo_core_public_key | default('') }}"
+        description:
+          - Public key of the Komodo Core allowed to connect (v2 PKI). Captured
+            from Core after first boot and stored as C(vault_komodo_core_public_key).
+      komodo_periphery_secrets:
+        type: dict
+        required: false
+        default: {}
+        description:
+          - Host-local secrets exposed to stacks as [[NAME]]. Override per host
+            in host_vars/<host>.yml from Vault. Never sent to Core.
+      komodo_periphery_service_name:
+        type: str
+        required: false
+        default: periphery
+        description: Name of the systemd unit created for the agent.

@@ -1,0 +1,48 @@
+---
+# Argument specification for the common_docker role.
+# Defaults here MUST match defaults/main.yml.
+argument_specs:
+  main:
+    short_description: Install and configure Docker CE on Debian/Ubuntu
+    description:
+      - Installs Docker CE and the compose plugin from the official repository,
+        configures the daemon, sets up the on-host directory layout, adds the
+        admin user to the docker group, and verifies the install.
+      - The directory owner is taken from the playbook-level C(user) variable.
+    author:
+      - Maintainer Name
+    options:
+      common_docker_dir:
+        type: path
+        required: false
+        default: /srv/docker
+        description: Base directory for Docker service data.
+      common_docker_backup_dir:
+        type: path
+        required: false
+        default: /srv/docker-backups
+        description: Directory for Docker service backups.
+      common_docker_create_readme:
+        type: bool
+        required: false
+        default: true
+        description: Whether to write a README documenting the directory layout.
+      common_docker_test_run:
+        type: bool
+        required: false
+        default: false
+        description: Whether to run a hello-world container as a smoke test.
+      common_docker_distribution_release:
+        type: str
+        required: false
+        default: "{{ ansible_facts['distribution_release'] }}"
+        description:
+          - APT distribution release used for the Docker repo. Defaults to the
+            detected release; override only if auto-detection fails.
+      common_docker_repo_url:
+        type: str
+        required: false
+        default: "https://download.docker.com/linux/{{ 'ubuntu' if ansible_facts['distribution'] == 'Ubuntu' else 'debian' }}"
+        description:
+          - Base URL of the Docker APT repository. Defaults based on the detected
+            distribution.

@@ -1,0 +1,120 @@
+---
+# Bitwarden Self-Hosted Password Manager (Lite)
+# Single unified container with PostgreSQL backend and smtp4dev
+#
+# Deployment: Auto-deployed via GitLab CI/CD on push to main
+# Web UI: https://bitwarden.example.com
+# SMTP UI: https://smtp4dev.example.com
+
+name: bitwarden
+
+services:
+  bitwarden:
+    image: ghcr.io/bitwarden/lite:2026.5.0@sha256:484484072ade90389795c50898b5fa4c1e39af90440f3cdfafc6fbdd3afd1718
+    container_name: bitwarden
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - '8080:8080'
+      - '8443:8443'
+    environment:
+      TZ: ${TZ}
+      BW_DOMAIN: ${BW_DOMAIN}
+      BW_DB_PROVIDER: ${BW_DB_PROVIDER}
+      BW_DB_SERVER: ${BW_DB_SERVER}
+      BW_DB_DATABASE: ${BW_DB_DATABASE}
+      BW_DB_USERNAME: ${BW_DB_USERNAME}
+      BW_DB_PASSWORD: ${BW_DB_PASSWORD}
+      BW_INSTALLATION_ID: ${BW_INSTALLATION_ID}
+      BW_INSTALLATION_KEY: ${BW_INSTALLATION_KEY}
+      BW_ENABLE_ADMIN: ${BW_ENABLE_ADMIN}
+      BW_ENABLE_SSO: ${BW_ENABLE_SSO}
+      globalSettings__disableUserRegistration: ${BW_DISABLE_REGISTRATION}
+      adminSettings__admins: ${BW_ADMIN_EMAIL}
+      globalSettings__mail__replyToEmail: ${BW_SMTP_REPLY_TO}
+      globalSettings__mail__smtp__host: ${BW_SMTP_HOST}
+      globalSettings__mail__smtp__port: ${BW_SMTP_PORT}
+      globalSettings__mail__smtp__ssl: ${BW_SMTP_SSL}
+      globalSettings__mail__smtp__username: ${BW_SMTP_USERNAME}
+      globalSettings__mail__smtp__password: ${BW_SMTP_PASSWORD}
+    volumes:
+      - ${APPDATA_DIR}/bitwarden/data:/etc/bitwarden
+      - ${APPDATA_DIR}/bitwarden/logs:/var/log/bitwarden
+    networks:
+      - bitwarden_network
+    healthcheck:
+      test: ['CMD', 'curl', '-sf', 'http://localhost:8080/alive']
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  db:
+    image: postgres:16.14@sha256:fe03a7605299a34ddf5e4f285dff78c3d7190a576b3c6b46f2fcff69f4bffd54
+    container_name: bitwarden-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${BW_DB_DATABASE}
+      POSTGRES_USER: ${BW_DB_USERNAME}
+      POSTGRES_PASSWORD: ${BW_DB_PASSWORD}
+    volumes:
+      - ${APPDATA_DIR}/bitwarden/postgres:/var/lib/postgresql/data
+    networks:
+      - bitwarden_network
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U ${BW_DB_USERNAME} -d ${BW_DB_DATABASE}']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  smtp:
+    image: rnwood/smtp4dev:3.15.0@sha256:25c434c1900a9c5b61e17ead0a774d9e81b80554d05cf64719d69e5ea8c66537
+    container_name: bitwarden-smtp
+    restart: unless-stopped
+    ports:
+      - '5000:80'
+    volumes:
+      - ${APPDATA_DIR}/bitwarden/smtp4dev:/smtp4dev
+    environment:
+      - ServerOptions__Urls=http://*:80
+      - ServerOptions__HostName=smtp4dev
+    networks:
+      - bitwarden_network
+
+  backup:
+    image: postgres:16.14-alpine@sha256:e013e867e712fec275706a6c51c966f0bb0c93cfa8f51000f85a15f9865a28cb
+    container_name: bitwarden-backup
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      BW_DB_SERVER: ${BW_DB_SERVER}
+      BW_DB_DATABASE: ${BW_DB_DATABASE}
+      BW_DB_USERNAME: ${BW_DB_USERNAME}
+      BW_DB_PASSWORD: ${BW_DB_PASSWORD}
+      LOCAL_RETENTION: ${BACKUP_LOCAL_RETENTION:-7}
+      BACKUP_CRON_SCHEDULE: ${BACKUP_CRON_SCHEDULE:-0 2 * * *}
+      BACKUP_ON_STARTUP: ${BACKUP_ON_STARTUP:-false}
+      BACKUP_NAS_TARGET: ${BACKUP_NAS_TARGET:-}
+      BACKUP_NAS_RETENTION: ${BACKUP_NAS_RETENTION:-14}
+      BACKUP_R2_BUCKET: ${BACKUP_R2_BUCKET:-}
+      BACKUP_R2_ENDPOINT: ${BACKUP_R2_ENDPOINT:-}
+      AWS_ACCESS_KEY_ID: ${BACKUP_R2_ACCESS_KEY:-}
+      AWS_SECRET_ACCESS_KEY: ${BACKUP_R2_SECRET_KEY:-}
+      BACKUP_R2_RETENTION: ${BACKUP_R2_RETENTION:-30}
+    volumes:
+      - ./scripts:/scripts:ro
+      - ${APPDATA_DIR}/bitwarden/data:/etc/bitwarden:ro
+      - /srv/docker-backups/bitwarden:/backups
+    entrypoint: ['/scripts/backup-entrypoint.sh']
+    networks:
+      - bitwarden_network
+
+networks:
+  bitwarden_network:
+    name: bitwarden_network
+    driver: bridge

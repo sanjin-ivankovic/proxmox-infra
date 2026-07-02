@@ -1,0 +1,29 @@
+---
+# Technitium DNS Server (technitium-2)
+# Secondary authoritative and recursive DNS server for high availability
+#
+# Deployment: Auto-deployed via GitLab CI/CD on push to main
+# Web UI: http://<host-ip>:5380
+# DNS Port: 53 (TCP/UDP)
+
+services:
+  technitium-2:
+    container_name: technitium-2
+    hostname: technitium-2
+    image: technitium/dns-server:15.2.0@sha256:23d3b63d959e997800b095fe93009b3fae271b5258234ff2ade8535cb33682c8
+    network_mode: host
+    environment:
+      TZ: ${TZ}
+      DNS_SERVER_DOMAIN: ${DNS_SERVER_DOMAIN}
+      DNS_SERVER_ADMIN_PASSWORD: ${DNS_SERVER_ADMIN_PASSWORD}
+      DNS_SERVER_PREFER_IPV6: "false"
+      DNS_SERVER_LOG_USING_LOCAL_TIME: "true"
+    volumes:
+      - ${APPDATA_DIR}/technitium-2/config:/etc/dns
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "dig", "@127.0.0.1", "localhost", "+time=2", "+tries=1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s

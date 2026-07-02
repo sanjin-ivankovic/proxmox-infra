@@ -1,0 +1,47 @@
+---
+# Configure — steady-state configuration (runs as maintainer).
+#
+# Updates system packages on every targeted host, then installs/configures
+# Docker on hosts carrying the "docker" Proxmox tag (the dynamic inventory turns
+# each tag into a group). Does NOT touch user or SSH settings — that is
+# bootstrap's job.
+#
+# Prerequisites: bootstrap.yml has run (maintainer exists, root login disabled).
+
+- name: Configure - Regular System Updates
+  hosts: "{{ target | default('all') }}"
+  become: true
+  gather_facts: true
+  remote_user: maintainer  # root login disabled after bootstrap
+  tags: [configure]
+
+  roles:
+    - role: homelab.proxmox.common_system
+      tags: [system, packages, update]
+
+  post_tasks:
+    - name: System configuration completion message
+      ansible.builtin.debug:
+        msg:
+          - "✓ System packages updated on {{ inventory_hostname }}"
+
+# Docker is only installed on hosts carrying the "docker" Proxmox tag. Hosts
+# without that tag get common_system but NOT Docker. Use --limit to scope a run
+# to a single host; Ansible intersects it with this `docker` group.
+- name: Configure - Docker
+  hosts: docker
+  become: true
+  gather_facts: true
+  remote_user: maintainer  # root login disabled after bootstrap
+  tags: [configure]
+
+  roles:
+    - role: homelab.proxmox.common_docker
+      tags: [docker, containers]
+
+  post_tasks:
+    - name: Docker configuration completion message
+      ansible.builtin.debug:
+        msg:
+          - "✓ Docker configured on {{ inventory_hostname }}"
+          - "  • Docker: systemctl status docker"

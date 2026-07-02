@@ -1,0 +1,16 @@
+---
+# ansible/inventory/host_vars/bitwarden.yml
+# Host-local Komodo periphery secrets for bitwarden. Real values live ONLY here
+# (in the host's periphery.config.toml), referenced from the stack as [[NAME]].
+# Add the matching vault_bitwarden_* keys via `make -C ansible vault-edit`.
+# Values sourced from the retired proxmox-infra-env-bitwarden sealed secret.
+
+komodo_periphery_secrets:
+  BW_DB_PASSWORD: "{{ vault_bitwarden_db_password }}"
+  BW_INSTALLATION_ID: "{{ vault_bitwarden_installation_id }}"
+  BW_INSTALLATION_KEY: "{{ vault_bitwarden_installation_key }}"
+  # Cloudflare R2 offsite backup credentials.
+  BACKUP_R2_ACCESS_KEY: "{{ vault_bitwarden_r2_access_key }}"
+  BACKUP_R2_SECRET_KEY: "{{ vault_bitwarden_r2_secret_key }}"
+  # NOTE: BW_SMTP_PASSWORD is empty in the current env (local smtp4dev capture),
+  # so it is not a secret here. Add it if real SMTP creds are introduced.

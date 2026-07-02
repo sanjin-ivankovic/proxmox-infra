@@ -1,0 +1,33 @@
+# ============================================================================
+# Komodo Resource Sync — Repos (shared git source)
+# ============================================================================
+# A single Repo resource declaring the git source for this monorepo. Every
+# [[stack]] references it via `linked_repo = "proxmox-infra"` instead of
+# repeating git_provider / git_account / repo / branch inline. The ResourceSync
+# resource itself does the same.
+#
+# WHAT THIS SHARES (and what it doesn't):
+#   - Shares the git CONFIG (provider/account/repo/branch) — one place to edit
+#     when rotating the git account, renaming the branch, or moving orgs.
+#   - Does NOT share a single clone. Each stack still runs on its own host, and
+#     each periphery clones the repo locally. `linked_repo` deduplicates config,
+#     not checkouts (clone-sharing only applies to multiple stacks on the SAME
+#     server, which we don't have — ~one stack per host).
+#
+# ORDERING: in the ResourceSync, repos.toml MUST be listed in `resource_path`
+# BEFORE stacks.toml so this Repo exists before stacks try to link it. See
+# komodo/resource-sync.toml.
+#
+# auth is the same v2 PKI/token model — git_account "komodo" resolves to the
+# GitLab token in Komodo Core's git_provider config (delivered by Ansible).
+# ============================================================================
+
+[[repo]]
+name = "proxmox-infra"
+tags = ["infra"]
+[repo.config]
+server = "gitlab"
+git_provider = "source.example.com"
+git_account = "komodo"
+repo = "example-org/proxmox-infra"
+branch = "main"

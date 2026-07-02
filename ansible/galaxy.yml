@@ -1,0 +1,68 @@
+---
+# Ansible Galaxy collection metadata for the homelab.proxmox collection.
+# Built in place from this directory: `ansible-galaxy collection build`.
+# Roles and playbooks are then addressable by FQCN, e.g.
+#   homelab.proxmox.common_ssh, homelab.proxmox.site
+namespace: homelab
+name: proxmox
+version: 0.1.0
+readme: README.md
+
+authors:
+  - Maintainer Name
+
+description: >-
+  Homelab Proxmox host configuration and service-control-plane provisioning —
+  the Ansible (Phase 2) half of the Terraform → Ansible → Komodo workflow.
+  Bootstraps Debian LXC hosts (and future Linux VMs), installs Docker, deploys
+  Komodo Core + Periphery, and manages the Talos cluster lifecycle.
+
+license:
+  - MIT
+
+tags:
+  # First entries are standard Galaxy categories (required by ansible-lint);
+  # the rest are descriptive.
+  - infrastructure
+  - linux
+  - tools
+  - homelab
+  - proxmox
+  - lxc
+  - docker
+  - komodo
+  - talos
+
+# Collection dependencies (mirrors requirements.yml). Galaxy-range syntax.
+dependencies:
+  community.general: ">=13.0.0,<14.0.0"
+  community.docker: ">=5.2.1,<6.0.0"
+  ansible.posix: ">=2.1.0,<3.0.0"
+  kubernetes.core: ">=6.2.0,<7.0.0"
+
+repository: https://source.example.com/example-org/proxmox-infra
+issues: https://source.example.com/example-org/proxmox-infra/-/issues
+
+# Only collection-legal content belongs in the built artifact. This directory
+# (ansible/) is also the live control root, so everything that is NOT a role,
+# playbook, collection meta, or doc is excluded from the tarball.
+build_ignore:
+  - ansible.cfg
+  - requirements.yml
+  - Makefile
+  - Makefile.d
+  - inventory
+  - lxc
+  - talos
+  - collections
+  - extensions
+  - .ansible
+  - .ansible_facts
+  - .ansible-lint
+  - .yamllint
+  - .gitignore
+  - .vault_pass
+  - .env.mk
+  - .env.mk.example
+  - .DS_Store
+  - "*.tar.gz"

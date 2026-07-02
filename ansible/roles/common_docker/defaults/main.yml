@@ -1,0 +1,23 @@
+---
+# ansible/roles/common_docker/defaults/main.yml
+
+# User for Docker directory ownership (inherited from playbook context)
+# This should be set in playbook vars or group_vars
+# common_docker_user: "{{ user }}"
+
+# Base directory for Docker containers and data
+common_docker_dir: '/srv/docker'
+
+# Backup directory for Docker service backups
+common_docker_backup_dir: '/srv/docker-backups'
+
+# Whether to create README.md documenting the directory structure
+common_docker_create_readme: true
+
+# Optional test run with hello-world container
+common_docker_test_run: false
+
+# Docker repository configuration
+# Override this if auto-detection fails or for testing specific releases
+common_docker_distribution_release: "{{ ansible_facts['distribution_release'] }}"
+common_docker_repo_url: "https://download.docker.com/linux/{{ 'ubuntu' if ansible_facts['distribution'] == 'Ubuntu' else 'debian' }}"

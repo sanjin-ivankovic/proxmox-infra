@@ -1,0 +1,229 @@
+#!/bin/bash
+# Docker-specific bash aliases
+# Deployed by common_docker role
+
+DOCKER_FOLDER=/srv/docker
+
+# DOCKER MANAGEMENT - Container and system-wide operations
+# All Docker commands start with "d"
+
+# Container Management
+alias dps='docker ps -a'                                                           # Show all containers
+alias dpss='docker ps -a --format "table {{.Names}}\t{{.State}}\t{{.Status}}\t{{.Image}}" | (sed -u 1q; sort)' # Formatted container list
+alias dstop='docker stop'                                                          # Stop container(s) - Usage: dstop container_name
+alias dstopall='docker stop $(docker ps -aq)'                                      # Stop ALL running containers
+alias drm='docker rm'                                                              # Remove container(s) - Usage: drm container_name
+alias dexec='docker exec -it'                                                      # Execute into container - Usage: dexec container_name bash
+
+# Logs and Monitoring
+alias dlogs='docker logs -tf --tail="50"'                                          # View container logs - Usage: dlogs container_name
+alias dlogsize='du -ch $(docker inspect --format="{{.LogPath}}" $(docker ps -qa)) 2>/dev/null | sort -h' # Show log file sizes
+alias dips="docker ps -q | xargs -n 1 docker inspect -f '{{.Name}}%tab%{{range .NetworkSettings.Networks}}{{.IPAddress}}%tab%{{end}}' | sed 's#%tab%#\t#g' | sed 's#/##g' | sort | column -t -N NAME,IP\(s\) -o $'\t'" # Show container IPs
+
+# System Information
+alias ddf='docker system df'                                                       # Show docker disk usage
+alias dinfo='docker system info'                                                   # Show docker system info
+
+# Cleanup Operations (use with caution!)
+alias dprunevol='docker volume prune -f'                                           # Remove unused volumes
+alias dprunesys='docker system prune -a -f'                                        # Remove all unused docker data
+alias ddelimages='docker rmi $(docker images -q) 2>/dev/null'                     # Remove ALL images (use carefully!)
+alias dprune='docker system prune -f && docker volume prune -f'                   # Safe cleanup: remove unused data and volumes
+
+# DANGEROUS: Complete docker cleanup (interactive confirmation)
+derase() {
+    echo "⚠️  WARNING: This will remove ALL containers, images, volumes, and unused data!"
+    echo ""
+    read -p "Are you absolutely sure? Type 'YES' to confirm: " -r
+    echo
+    if [[ $REPLY == "YES" ]]; then
+        echo "🗑️  Removing all Docker containers..."
+        # shellcheck disable=SC2046
+        docker stop $(docker ps -aq) 2>/dev/null
+        # shellcheck disable=SC2046
+        docker rm $(docker ps -aq) 2>/dev/null
+        echo "🗑️  Removing all Docker images..."
+        # shellcheck disable=SC2046
+        docker rmi $(docker images -q) 2>/dev/null
+        echo "🗑️  Removing all Docker volumes..."
+        docker volume prune -f
+        echo "🗑️  Running system prune..."
+        docker system prune -a -f
+        echo "✅ Docker completely cleaned!"
+    else
+        echo "❌ Operation cancelled. (Type 'YES' to confirm)"
+        return 1
+    fi
+}
+
+# DOCKER COMPOSE - operate on the LIVE, Komodo-deployed project
+#
+# Services on this host are deployed by Komodo (Periphery) from a git checkout
+# under /etc/komodo, using a Komodo-rendered .env. Rather than guess at a local
+# directory (the retired /srv/docker/<svc> layout), these helpers read Docker
+# Compose's own project labels off the running containers:
+#   com.docker.compose.project            -> project name
+#   com.docker.compose.project.config_files -> compose file(s)
+#   com.docker.compose.project.environment_file -> rendered .env
+#   com.docker.compose.project.working_dir  -> project directory
+# so every command targets EXACTLY what Komodo deployed (correct compose file
+# + correct env), never a stale local copy.
+#
+# Komodo's checkout under /etc/komodo is root-owned (Periphery runs as root), so
+# the compose invocations use sudo to read those files. maintainer has passwordless
+# sudo, so this is transparent.
+#
+# The project is auto-detected when the host runs exactly one. On multi-stack
+# hosts, select it explicitly via the DC variable, e.g.:  DC=bitwarden dcrec
+#
+# NOTE: the canonical way to deploy/update a service is a git push (Komodo
+# reconciles). These helpers are for local ops (recreate/restart/logs/pull).
+# After a full `dcdown` the containers (and their labels) are gone, so bring the
+# service back with a Komodo deploy rather than a local `dcup`.
+
+# Resolve the target compose project name (arg > $DC > auto-detect single).
+_dc_project() {
+    local want="${1:-$DC}"
+    if [ -n "$want" ]; then echo "$want"; return 0; fi
+    local projs n
+    projs=$(docker ps -a --filter "label=com.docker.compose.project" \
+        --format '{{ .Label "com.docker.compose.project" }}' 2>/dev/null | sort -u | sed '/^$/d')
+    n=$(printf '%s\n' "$projs" | sed '/^$/d' | wc -l)
+    if [ "$n" -eq 1 ]; then
+        echo "$projs"
+    elif [ "$n" -eq 0 ]; then
+        echo "❌ No compose project found on this host. Deploy via Komodo first." >&2
+        return 1
+    else
+        echo "⚠️  Multiple compose projects on this host; pick one with DC=<name>:" >&2
+        # shellcheck disable=SC2086
+        printf '   - %s\n' $projs >&2
+        return 1
+    fi
+}
+
+# Populate the global _DC_ARGS array with `docker compose` targeting flags
+# (-p / --project-directory / -f / --env-file), read from the project's labels.
+# Sets _DC_PROJECT on success.
+_dc_resolve() {
+    local proj cid cfgs envf wdir f
+    proj=$(_dc_project "$1") || return 1
+    cid=$(docker ps -aq --filter "label=com.docker.compose.project=$proj" | head -1)
+    if [ -z "$cid" ]; then
+        echo "❌ Project '$proj' has no containers (fully down)." >&2
+        echo "   Redeploy via Komodo (git push) rather than a local 'up'." >&2
+        return 1
+    fi
+    cfgs=$(docker inspect "$cid" --format '{{ index .Config.Labels "com.docker.compose.project.config_files" }}')
+    envf=$(docker inspect "$cid" --format '{{ index .Config.Labels "com.docker.compose.project.environment_file" }}')
+    wdir=$(docker inspect "$cid" --format '{{ index .Config.Labels "com.docker.compose.project.working_dir" }}')
+    _DC_PROJECT="$proj"
+    _DC_ARGS=(-p "$proj")
+    [ -n "$wdir" ] && _DC_ARGS+=(--project-directory "$wdir")
+    local IFS=','
+    # shellcheck disable=SC2086
+    for f in $cfgs; do [ -n "$f" ] && _DC_ARGS+=(-f "$f"); done
+    # shellcheck disable=SC2086
+    for f in $envf; do [ -n "$f" ] && _DC_ARGS+=(--env-file "$f"); done
+    return 0
+}
+
+# Docker Compose UP - bring up the service (as Komodo deployed it)
+dcup() {
+    _dc_resolve "" || return 1
+    echo "🚀 Starting service: $_DC_PROJECT"
+    sudo docker compose "${_DC_ARGS[@]}" up -d --remove-orphans "$@"
+}
+
+# Docker Compose DOWN - bring down the service
+dcdown() {
+    _dc_resolve "" || return 1
+    echo "🛑 Stopping service: $_DC_PROJECT"
+    sudo docker compose "${_DC_ARGS[@]}" down --remove-orphans "$@"
+}
+
+# Docker Compose RESTART - restart the service
+dcrestart() {
+    _dc_resolve "" || return 1
+    echo "🔄 Restarting service: $_DC_PROJECT"
+    sudo docker compose "${_DC_ARGS[@]}" restart "$@"
+}
+
+# Docker Compose START - start stopped service
+dcstart() {
+    _dc_resolve "" || return 1
+    echo "▶️  Starting service: $_DC_PROJECT"
+    sudo docker compose "${_DC_ARGS[@]}" start "$@"
+}
+
+# Docker Compose STOP - stop service without removing
+dcstop() {
+    _dc_resolve "" || return 1
+    echo "⏸️  Stopping service: $_DC_PROJECT"
+    sudo docker compose "${_DC_ARGS[@]}" stop "$@"
+}
+
+# Docker Compose RECREATE - force recreate containers
+dcrec() {
+    _dc_resolve "" || return 1
+    echo "♻️  Recreating service: $_DC_PROJECT"
+    sudo docker compose "${_DC_ARGS[@]}" up -d --force-recreate --remove-orphans "$@"
+}
+
+# Docker Compose LOGS - view service logs
+dclogs() {
+    _dc_resolve "" || return 1
+    echo "📋 Logs for service: $_DC_PROJECT"
+    sudo docker compose "${_DC_ARGS[@]}" logs -tf --tail="50" "$@"
+}
+
+# Docker Compose PULL - pull new images
+dcpull() {
+    _dc_resolve "" || return 1
+    echo "📥 Pulling images for service: $_DC_PROJECT"
+    sudo docker compose "${_DC_ARGS[@]}" pull "$@"
+}
+
+# Docker Compose PS - show containers
+dcps() {
+    _dc_resolve "" || return 1
+    sudo docker compose "${_DC_ARGS[@]}" ps "$@"
+}
+
+# Docker Compose CONFIG - validate and view resolved config
+dcconfig() {
+    _dc_resolve "" || return 1
+    sudo docker compose "${_DC_ARGS[@]}" config "$@"
+}
+
+# Docker Compose EXEC - execute command in container
+dcexec() {
+    _dc_resolve "" || return 1
+    sudo docker compose "${_DC_ARGS[@]}" exec "$@"
+}
+
+# Generic docker compose runner for advanced usage
+dcrun() {
+    _dc_resolve "" || return 1
+    sudo docker compose "${_DC_ARGS[@]}" "$@"
+}
+
+# Show current service info
+dcinfo() {
+    _dc_resolve "" || return 1
+    echo "📍 Project : $_DC_PROJECT"
+    echo "🧩 Compose : sudo docker compose ${_DC_ARGS[*]}"
+    echo ""
+    sudo docker compose "${_DC_ARGS[@]}" ps
+}
+
+# Quick navigation
+alias cds='cd $DOCKER_FOLDER'     # Jump to docker data folder (/srv/docker/appdata lives here)
+# Jump to the live project's working directory (the Komodo checkout)
+cdservice() {
+    _dc_resolve "" >/dev/null 2>&1 || { cd "$DOCKER_FOLDER" || return 1; return 0; }
+    local cid wdir
+    cid=$(docker ps -aq --filter "label=com.docker.compose.project=$_DC_PROJECT" | head -1)
+    wdir=$(docker inspect "$cid" --format '{{ index .Config.Labels "com.docker.compose.project.working_dir" }}')
+    cd "${wdir:-$DOCKER_FOLDER}" || return 1
+}

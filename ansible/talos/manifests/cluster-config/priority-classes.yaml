@@ -1,0 +1,50 @@
+---
+# ============================================================================
+# Kubernetes PriorityClasses for Workload Tier Management
+# ============================================================================
+# These PriorityClasses determine pod scheduling and eviction order.
+# Higher priority = less likely to be evicted during resource pressure.
+#
+# Applied by: ansible/playbooks/talos/05-configure-workload-tiers.yml
+# ============================================================================
+
+# Critical Infrastructure Tier
+# Priority: 1000000000 (highest)
+# Used by: MetalLB, Traefik, cert-manager, ArgoCD, sealed-secrets
+apiVersion: scheduling.k8s.io/v1
+kind: PriorityClass
+metadata:
+  name: critical-infrastructure
+  annotations:
+    description: "Critical infrastructure components (ingress, load balancer, GitOps)"
+value: 1000000000
+globalDefault: false
+preemptionPolicy: PreemptLowerPriority
+
+---
+# High Priority Stateful Tier
+# Priority: 100000000
+# Used by: PostgreSQL, Valkey, Longhorn, stateful applications
+apiVersion: scheduling.k8s.io/v1
+kind: PriorityClass
+metadata:
+  name: high-priority-stateful
+  annotations:
+    description: "High-priority stateful workloads (databases, storage)"
+value: 100000000
+globalDefault: false
+preemptionPolicy: PreemptLowerPriority
+
+---
+# Normal Priority Tier
+# Priority: 0 (default Kubernetes priority)
+# Used by: Regular applications, web services, background jobs
+apiVersion: scheduling.k8s.io/v1
+kind: PriorityClass
+metadata:
+  name: normal-priority
+  annotations:
+    description: "Normal priority for regular applications"
+value: 0
+globalDefault: true  # Make this the default for pods without explicit priorityClassName
+preemptionPolicy: PreemptLowerPriority

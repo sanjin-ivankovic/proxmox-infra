@@ -1,0 +1,10 @@
+---
+# ansible/inventory/host_vars/omni.yml
+# Host-local Komodo periphery secrets for omni (Sidero Talos management plane).
+# Add the matching vault_omni_* keys via `make -C ansible vault-edit`.
+#
+# Source: kubectl get secret proxmox-infra-env-omni -n argo-workflows \
+#           -o jsonpath='{.data.ENV_OMNI}' | base64 -d
+
+komodo_periphery_secrets:
+  OMNI_OIDC_CLIENT_SECRET: "{{ vault_omni_oidc_client_secret }}"

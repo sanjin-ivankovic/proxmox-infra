@@ -1,0 +1,56 @@
+---
+# GitLab CE — self-hosted Git forge serving source.example.com.
+#
+# Deployment: Komodo stack `gitlab` (komodo/stacks.toml), pushed on merge to main.
+# Web:  https://source.example.com
+#       host :8080 -> container nginx :80, TLS terminated by the cluster Traefik.
+#       (nginx stays on :80 internally — omnibus puma already owns :8080.)
+# SSH:  git@source.example.com:22 externally — the cluster gitlab-ssh-lb listens on
+#       :22 and forwards to the LXC's :2222 -> container :22 (compose maps 2222:22).
+#
+# Instance config lives in ./omnibus_config.rb (gitlab.rb syntax), mounted at
+# /omnibus_config.rb and loaded via GITLAB_OMNIBUS_CONFIG = from_file(...). It is
+# mounted OUTSIDE /etc/gitlab so it avoids the reconfigure chmod on
+# /etc/gitlab/gitlab.rb and can stay read-only. Edit that file to change the
+# external URL, SSH port, or memory tuning.
+#
+# Backups: handled by the existing Proxmox Backup Server container backup — all
+# state lives in the LXC-rootfs bind-mounts below (repos, bundled Postgres,
+# uploads, and /etc/gitlab incl. gitlab-secrets.json). No app-level backup here.
+
+name: gitlab
+
+services:
+  gitlab:
+    image: gitlab/gitlab-ce:19.1.1-ce.0@sha256:0834019f368b9ec255b5f41924431e50442b14e5fd2d705556d20d55c9164273
+    container_name: gitlab
+    restart: unless-stopped
+    shm_size: '256m'
+    ports:
+      - '8080:80' # web: host 8080 -> nginx 80 (puma owns 8080 inside)
+      - '2222:22' # git SSH: LXC :2222 -> container :22 (gitlab-ssh-lb fronts :22)
+    environment:
+      TZ: ${TZ}
+      # First-boot root password seed (honoured by the omnibus image on initial
+      # reconfigure). Komodo host-local secret.
+      GITLAB_ROOT_PASSWORD: ${GITLAB_ROOT_PASSWORD}
+      # Load the repo-hosted instance config (non-secret). See ./omnibus_config.rb.
+      GITLAB_OMNIBUS_CONFIG: "from_file('/omnibus_config.rb')"
+    volumes:
+      - ${APPDATA_DIR}/gitlab/config:/etc/gitlab
+      - ${APPDATA_DIR}/gitlab/logs:/var/log/gitlab
+      - ${APPDATA_DIR}/gitlab/data:/var/opt/gitlab
+      - ./omnibus_config.rb:/omnibus_config.rb:ro
+    networks:
+      - gitlab_network
+    healthcheck:
+      test: ['CMD', 'curl', '-sf', 'http://localhost/-/health']
+      interval: 60s
+      timeout: 10s
+      retries: 5
+      start_period: 600s # omnibus first boot / reconfigure is slow
+
+networks:
+  gitlab_network:
+    name: gitlab_network
+    driver: bridge

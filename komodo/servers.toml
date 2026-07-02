@@ -1,0 +1,85 @@
+# ============================================================================
+# Komodo Resource Sync — Servers
+# ============================================================================
+# One [[server]] per LXC host running a Periphery agent (port 8120). Komodo Core
+# reconciles these from git. `address` is the periphery endpoint; auth is via
+# the v2 PKI handshake (Core's key is trusted by each periphery's config), so no
+# secret appears here.
+# ============================================================================
+
+[[server]]
+name = "technitium-1"
+tags = ["dns", "authoritative"]
+[server.config]
+address = "https://10.10.0.10:8120"
+enabled = true
+
+[[server]]
+name = "technitium-2"
+tags = ["dns", "authoritative"]
+[server.config]
+address = "https://10.10.0.11:8120"
+enabled = true
+
+[[server]]
+name = "adguard-1"
+tags = ["dns", "filtering"]
+[server.config]
+address = "https://10.10.0.12:8120"
+enabled = true
+
+[[server]]
+name = "adguard-2"
+tags = ["dns", "filtering"]
+[server.config]
+address = "https://10.10.0.13:8120"
+enabled = true
+
+[[server]]
+name = "gitlab"
+tags = ["git"]
+[server.config]
+address = "https://10.40.0.10:8120"
+enabled = true
+
+[[server]]
+name = "gitlab-runner"
+tags = ["ci"]
+[server.config]
+address = "https://10.40.0.11:8120"
+enabled = true
+
+[[server]]
+name = "bitwarden"
+tags = ["password-manager"]
+[server.config]
+address = "https://10.40.0.12:8120"
+enabled = true
+
+[[server]]
+name = "paperless-ngx"
+tags = ["document-management"]
+[server.config]
+address = "https://10.40.0.13:8120"
+enabled = true
+
+[[server]]
+name = "omni"
+tags = ["talos", "management"]
+[server.config]
+address = "https://10.40.0.15:8120"
+enabled = true
+
+[[server]]
+name = "semaphore"
+tags = ["ansible"]
+[server.config]
+address = "https://10.40.0.16:8120"
+enabled = true
+
+[[server]]
+name = "hermes"
+tags = ["agent"]
+[server.config]
+address = "https://10.40.0.17:8120"
+enabled = true

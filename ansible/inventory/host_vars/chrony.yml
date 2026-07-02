@@ -1,0 +1,10 @@
+---
+# chrony host overrides
+#
+# common_system's connectivity probe defaults to a TCP check against
+# common_system_network_check_host:443 (default 1.1.1.1). On this network the
+# Core→WAN "BLOCK DoH 443 (public resolvers)" firewall rule intentionally drops
+# 1.1.1.1:443 (it's a public DoH endpoint), so the probe times out even though
+# the host has general internet via the Core→WAN ALLOW rule. Disable the
+# false-failing gate here; apt tasks still surface any real connectivity issue.
+common_system_network_check_enabled: false

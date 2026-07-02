@@ -1,0 +1,91 @@
+---
+# Sidero Omni — self-hosted Talos/Kubernetes management plane.
+#
+# Deployment: auto-deployed via the proxmox-infra CI workflow on push to main.
+# URL: https://omni.example.com
+#
+# Architecture (per Sidero v1.8.0 on-prem docs):
+#   - Omni terminates TLS itself on :443 (UI + gRPC) and :8090 (machine API).
+#     No reverse proxy — the *.example.com wildcard (Let's Encrypt, publicly
+#     trusted) is mounted as the server chain + key.
+#   - SideroLink WireGuard listens on UDP 50180; the advertised endpoint is
+#     this host's LAN IP (10.40.0.15) so Talos nodes on the LAN can dial back.
+#   - host networking + NET_ADMIN + /dev/net/tun are required for WireGuard.
+#
+# Secret files live OUTSIDE the synced service dir, in /srv/omni-secrets/, and
+# are mounted by ABSOLUTE path. The deploy uses `rsync --delete` on
+# /srv/docker/omni/, which would wipe anything not in git; keeping these in a
+# separate dir makes them survive deploys. Place them on the host manually
+# (see README.md), NOT committed:
+#   - /srv/omni-secrets/server-chain.pem, server-key.pem  (cert-manager
+#     *.example.com wildcard; refreshed by a host cron)
+#   - /srv/omni-secrets/omni.asc  (GPG key for etcd encryption; CRITICAL,
+#     back it up)
+#
+# Secrets come from the host .env (proxmox-infra-env-omni SealedSecret):
+#   OMNI_OIDC_CLIENT_ID, OMNI_OIDC_CLIENT_SECRET, OMNI_EULA_NAME,
+#   OMNI_EULA_EMAIL
+
+name: omni
+
+services:
+  omni:
+    container_name: omni
+    image: ghcr.io/siderolabs/omni:v1.8.2@sha256:f473723eebf8a86372c45e391d9aa0f861a69b65c59ecbb211bae68781f4691d
+    network_mode: host
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    restart: unless-stopped
+    volumes:
+      # Secret files mounted by ABSOLUTE path (outside the rsync --delete dir).
+      - /srv/omni-secrets/server-chain.pem:/server-chain.pem:ro
+      - /srv/omni-secrets/server-key.pem:/server-key.pem:ro
+      - /srv/omni-secrets/omni.asc:/omni.asc:ro
+      - omni_etcd:/_out/etcd
+      - omni_sqlite:/_out/sqlite
+    command:
+      - --name=example-omni
+      # --- TLS (Omni terminates) ---
+      - --cert=/server-chain.pem
+      - --key=/server-key.pem
+      - --machine-api-cert=/server-chain.pem
+      - --machine-api-key=/server-key.pem
+      # --- Bind addresses ---
+      - --bind-addr=0.0.0.0:443
+      - --machine-api-bind-addr=0.0.0.0:8090
+      - --k8s-proxy-bind-addr=0.0.0.0:8100
+      - --event-sink-port=8091
+      # --- Advertised URLs (what machines/clients are told to connect to) ---
+      - --advertised-api-url=https://omni.example.com/
+      - --siderolink-api-advertised-url=https://omni.example.com:8090/
+      - --advertised-kubernetes-proxy-url=https://omni.example.com:8100/
+      # SideroLink WireGuard: LAN-only, advertise this host's LAN IP.
+      - --siderolink-wireguard-advertised-addr=10.40.0.15:50180
+      # --- Storage / encryption ---
+      - --etcd-embedded=true
+      - --private-key-source=file:///omni.asc
+      - --sqlite-storage-path=/_out/sqlite/omni.db
+      # --- Auth: Pocket ID OIDC (client `omni`) ---
+      - --auth-auth0-enabled=false
+      - --auth-oidc-enabled=true
+      - --auth-oidc-provider-url=https://pocket-id.example.com
+      - --auth-oidc-client-id=${OMNI_OIDC_CLIENT_ID}
+      - --auth-oidc-client-secret=${OMNI_OIDC_CLIENT_SECRET}
+      - --auth-oidc-scopes=openid
+      - --auth-oidc-scopes=profile
+      - --auth-oidc-scopes=email
+      - --initial-users=maintainer@example.com
+      # --- EULA (BSL, homelab/non-production) ---
+      - --eula-accept-name=${OMNI_EULA_NAME}
+      - --eula-accept-email=${OMNI_EULA_EMAIL}
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: '3'
+
+volumes:
+  omni_etcd:
+  omni_sqlite:

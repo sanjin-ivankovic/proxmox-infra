@@ -1,0 +1,33 @@
+---
+# Verify: assert common_ssh actually hardened sshd_config.
+- name: Verify
+  hosts: all
+  become: true
+  tasks:
+    - name: Read sshd_config
+      ansible.builtin.slurp:
+        src: /etc/ssh/sshd_config
+      register: sshd_config_raw
+
+    - name: Decode sshd_config
+      ansible.builtin.set_fact:
+        sshd_config: "{{ sshd_config_raw.content | b64decode }}"
+
+    - name: Assert the Ansible-managed hardening block is present
+      ansible.builtin.assert:
+        that:
+          - "'ANSIBLE MANAGED BLOCK - SSH Hardening' in sshd_config"
+        fail_msg: "common_ssh did not write its managed block into sshd_config"
+
+    - name: Assert key hardening directives were applied
+      ansible.builtin.assert:
+        that:
+          - "'PermitRootLogin no' in sshd_config"
+          - "'PasswordAuthentication no' in sshd_config"
+          - "'PubkeyAuthentication yes' in sshd_config"
+          - "'MaxAuthTries 3' in sshd_config"
+        fail_msg: "Expected hardened sshd directives are missing"
+
+    - name: Validate sshd config parses (sshd -t)
+      ansible.builtin.command: /usr/sbin/sshd -t
+      changed_when: false

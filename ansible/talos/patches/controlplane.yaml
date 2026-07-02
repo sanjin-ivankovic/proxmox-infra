@@ -1,0 +1,60 @@
+---
+# ============================================================================
+# Talos Machine Config Patch - Control Plane
+# ============================================================================
+# This patch is applied only to control plane nodes.
+#
+# Usage: Applied automatically during config generation via
+#        talosctl gen config --config-patch-control-plane @patches/controlplane.yaml
+# ============================================================================
+
+machine:
+  network:
+    interfaces:
+      - interface: ens18
+        vip:
+          ip: "10.40.0.40"
+
+cluster:
+  # Control Plane-specific etcd configuration
+  etcd:
+    # Advertise metrics for monitoring
+    extraArgs:
+      listen-metrics-urls: http://0.0.0.0:2381
+
+  # API Server configuration
+  apiServer:
+    extraArgs:
+      # Audit logging
+      audit-log-path: /var/log/audit/kube/audit.log
+      audit-log-maxage: "30"
+      audit-log-maxbackup: "10"
+      audit-log-maxsize: "100"
+
+      # OIDC authentication via Pocket ID (per-user cluster login for Headlamp).
+      # The issuer MUST be the public hostname https://pocket-id.example.com
+      # because the OIDC `iss` claim in Pocket ID's tokens is that exact string
+      # and the apiserver compares it verbatim — an in-cluster URL would
+      # mismatch and fail validation. From the CP nodes that hostname resolves
+      # to the Traefik LB (10.40.0.67) on the node subnet and is reachable
+      # (verified); the apiserver fetches JWKS over that path to validate tokens.
+      # Public Let's Encrypt cert on the issuer → no oidc-ca-file needed.
+      # Note: OIDC token validation thus depends on Traefik/ingress being up;
+      # cert-based admin (kubeconfig) remains as fallback regardless.
+      #
+      # The `oidc:` prefixes namespace OIDC identities/groups so they can't
+      # collide with cert identities and make RBAC subjects explicit
+      # (e.g. group `oidc:infra-admins`). Pocket ID emits both `preferred_username`
+      # and `groups` (verified via its discovery doc). oidc-client-id is the
+      # Pocket ID `headlamp` client_id (not secret; tokens verified via JWKS).
+      oidc-issuer-url: https://pocket-id.example.com
+      oidc-client-id: 28f75677-a157-4b37-ac8d-91dbd216818d
+      oidc-username-claim: preferred_username
+      oidc-username-prefix: "oidc:"
+      oidc-groups-claim: groups
+      oidc-groups-prefix: "oidc:"
+
+    # Additional SANs for the API server certificate
+    certSANs:
+      - 10.40.0.40
+      - talos-vip.example.com

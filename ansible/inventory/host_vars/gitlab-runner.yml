@@ -1,0 +1,11 @@
+---
+# ansible/inventory/host_vars/gitlab-runner.yml
+# Host-local Komodo periphery secrets for gitlab-runner. Real values live ONLY
+# here (rendered into the host's periphery.config.toml), referenced from the
+# stack in komodo/stacks.toml as [[NAME]].
+# Add the matching vault_gitlab_* keys via `make -C ansible vault-edit`.
+
+komodo_periphery_secrets:
+  # Runner authentication token (glrt-…) created in the GitLab UI
+  # (Admin → CI/CD → Runners). See plan Part D for the one-time register step.
+  GITLAB_RUNNER_TOKEN: "{{ vault_gitlab_runner_token }}"

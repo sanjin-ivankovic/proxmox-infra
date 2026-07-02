@@ -1,0 +1,45 @@
+---
+# AdGuard Home DNS Server (adguard-2)
+# Secondary network-wide ad blocking and DNS server for high availability
+#
+# Deployment: Auto-deployed via Komodo on push to main
+# Web UI: http://10.10.0.13:3000 (initial setup)
+# DNS Port: 53 (TCP/UDP)
+# DoT/DoQ Port: 853 (TCP/UDP)
+# DoH Port: 443 (TCP/UDP)
+
+services:
+  # AdGuard Home - DNS AdBlocking
+  adguard-2:
+    container_name: adguard-2
+    hostname: adguard-2
+    image: adguard/adguardhome:v0.107.77@sha256:e6f2b8bcda06064ab055b44933a4f0e983c35558b9cdb8d2e7ab1efcee36d890
+    network_mode: host
+    depends_on:
+      unbound-2:
+        condition: service_healthy
+    environment:
+      TZ: ${TZ}
+    volumes:
+      - ${APPDATA_DIR}/adguard-2/work:/opt/adguardhome/work
+      - ${APPDATA_DIR}/adguard-2/conf:/opt/adguardhome/conf
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "nslookup", "localhost", "127.0.0.1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  # Unbound - DNS-over-TLS forwarder to Quad9 with DNSSEC validation
+  unbound-2:
+    image: ${REGISTRY_IMAGE}/unbound:1.25.1
+    container_name: unbound-2
+    network_mode: host
+    environment:
+      TZ: ${TZ}
+      # UNBOUND_CACHE_PERCENTAGE: "40"   # optional per-host cache tuning (1-90)
+    volumes:
+      - ../../docker/unbound/data/opt/unbound/etc/unbound/unbound.conf:/opt/unbound/etc/unbound/unbound.conf:ro
+      - ../../docker/unbound/data/opt/unbound/etc/unbound/forward-records.conf:/opt/unbound/etc/unbound/forward-records.conf:ro
+    restart: unless-stopped

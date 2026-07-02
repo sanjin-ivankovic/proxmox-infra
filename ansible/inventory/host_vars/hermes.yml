@@ -1,0 +1,25 @@
+---
+# ansible/inventory/host_vars/hermes.yml
+
+# --- Connectivity probe override ------------------------------------------
+# common_system's connectivity probe defaults to a TCP check against
+# common_system_network_check_host:443 (default 1.1.1.1). On this network the
+# Core→WAN "BLOCK DoH 443 (public resolvers)" firewall rule intentionally drops
+# 1.1.1.1:443 (it's a public DoH endpoint), so the probe times out even though
+# the host has general internet via the Core→WAN ALLOW rule. Disable the
+# false-failing gate here; apt tasks still surface any real connectivity issue.
+# (Same override as the chrony host.)
+common_system_network_check_enabled: false
+
+# --- Komodo periphery secrets ---------------------------------------------
+# Host-local Komodo periphery secrets for Hermes. Real values live ONLY here (in
+# the host's periphery.config.toml), referenced from the stack as [[NAME]].
+# Add/verify the matching vault_hermes_* keys via `make -C ansible vault-edit`.
+#
+# OPENAI_API_KEY is the LiteLLM virtual key (Hermes's "custom" provider). It is
+# injected as env so it overrides .env and supplies the custom provider's key
+# without committing it to git — the committed services/hermes/config.yaml omits
+# api_key. See services/hermes/{config.yaml,README.md}.
+komodo_periphery_secrets:
+  OPENAI_API_KEY: "{{ vault_hermes_litellm_api_key }}"
+  TELEGRAM_BOT_TOKEN: "{{ vault_hermes_telegram_bot_token }}"

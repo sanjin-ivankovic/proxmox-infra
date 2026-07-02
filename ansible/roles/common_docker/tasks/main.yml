@@ -1,0 +1,190 @@
+---
+# ansible/roles/common_docker/tasks/main.yml
+
+- name: Ensure Docker prerequisites
+  tags: [docker, install, packages]
+  block:
+    - name: Install required packages
+      ansible.builtin.apt:
+        name:
+          - ca-certificates
+          - curl
+          - gnupg
+        state: present
+        update_cache: true
+
+    - name: Create APT keyrings directory
+      ansible.builtin.file:
+        path: /etc/apt/keyrings
+        state: directory
+        mode: '0755'
+
+    - name: Download Docker GPG key
+      ansible.builtin.get_url:
+        url: '{{ common_docker_repo_url }}/gpg'
+        dest: /etc/apt/keyrings/docker.asc
+        mode: '0644'
+
+    - name: Add Docker repository
+      ansible.builtin.copy:
+        dest: /etc/apt/sources.list.d/docker.sources
+        content: |
+          Types: deb
+          URIs: {{ common_docker_repo_url }}
+          Suites: {{ common_docker_distribution_release }}
+          Components: stable
+          Signed-By: /etc/apt/keyrings/docker.asc
+        mode: '0644'
+
+    - name: Update apt cache
+      ansible.builtin.apt:
+        update_cache: true
+
+    - name: Install Docker packages
+      ansible.builtin.apt:
+        name:
+          - docker-ce
+          - docker-ce-cli
+          - containerd.io
+          - docker-buildx-plugin
+          - docker-compose-plugin
+        state: present
+
+- name: Configure Docker
+  tags: [docker, config]
+  block:
+    - name: Create Docker config directory
+      ansible.builtin.file:
+        path: /etc/docker
+        state: directory
+        mode: '0775'
+
+    - name: Configure Docker daemon
+      ansible.builtin.template:
+        src: daemon.json.j2
+        dest: /etc/docker/daemon.json
+        owner: root
+        group: root
+        mode: '0644'
+      notify: restart docker
+      when: docker_tls_enabled is not defined or not docker_tls_enabled
+
+    - name: Ensure docker.service.d directory exists
+      ansible.builtin.file:
+        path: /etc/systemd/system/docker.service.d
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+
+    - name: Override Docker service ExecStart
+      ansible.builtin.blockinfile:
+        path: /etc/systemd/system/docker.service.d/override.conf
+        create: true
+        marker: '### {mark} ###'
+        block: |
+          [Service]
+          ExecStart=
+          ExecStart=/usr/bin/dockerd --containerd=/run/containerd/containerd.sock
+        owner: root
+        group: root
+        mode: '0644'
+      notify: reload systemd
+
+    - name: Ensure user is in docker group
+      tags: [users]
+      ansible.builtin.user:
+        name: '{{ user }}'
+        groups: docker
+        append: true
+
+    - name: Get user UID and GID
+      tags: [check]
+      ansible.builtin.getent:
+        database: passwd
+        key: '{{ user }}'
+      register: common_docker_user_info
+
+    - name: Set PUID and PGID
+      tags: [check]
+      ansible.builtin.set_fact:
+        common_docker_puid: '{{ common_docker_user_info.ansible_facts.getent_passwd[user][1] }}'
+        common_docker_pgid: '{{ common_docker_user_info.ansible_facts.getent_passwd[user][2] }}'
+
+- name: Setup Docker directory structure
+  tags: [docker, directories, setup]
+  block:
+    - name: Ensure main Docker directory exists
+      ansible.builtin.file:
+        path: '{{ common_docker_dir }}'
+        state: directory
+        mode: '0755'
+        owner: '{{ user }}'
+        group: docker
+
+    - name: Ensure Docker backup directory exists
+      ansible.builtin.file:
+        path: '{{ common_docker_backup_dir }}'
+        state: directory
+        mode: '0755'
+        owner: '{{ user }}'
+        group: docker
+
+    - name: Create README documenting directory structure
+      ansible.builtin.template:
+        src: README.md.j2
+        dest: '{{ common_docker_dir }}/README.md'
+        owner: '{{ user }}'
+        group: docker
+        mode: '0644'
+      when: common_docker_create_readme | default(true)
+
+- name: Deploy Docker aliases
+  tags: [docker, config, aliases]
+  ansible.builtin.copy:
+    src: docker_aliases
+    dest: '/home/{{ user }}/.docker_aliases'
+    owner: '{{ user }}'
+    group: '{{ user }}'
+    mode: '0644'
+
+- name: Verify Docker installation
+  tags: [docker, verify, check]
+  block:
+    - name: Ensure Docker service is running
+      ansible.builtin.service:
+        name: docker
+        state: started
+        enabled: true
+
+    - name: Get Docker version
+      ansible.builtin.command: docker --version
+      register: common_docker_version_output
+      changed_when: false
+      failed_when: common_docker_version_output.rc != 0
+
+    - name: Display Docker version
+      ansible.builtin.debug:
+        msg: '{{ common_docker_version_output.stdout }}'
+
+    - name: Verify Docker Compose plugin
+      ansible.builtin.command: docker compose version
+      register: common_docker_compose_version_output
+      changed_when: false
+      failed_when: common_docker_compose_version_output.rc != 0
+
+    - name: Display Docker Compose version
+      ansible.builtin.debug:
+        msg: '{{ common_docker_compose_version_output.stdout }}'
+
+    - name: Test Docker with hello-world (optional)
+      ansible.builtin.command: docker run --rm hello-world
+      register: common_docker_hello_world
+      changed_when: false
+      failed_when: false
+      when: common_docker_test_run | default(false)
+
+    - name: Display hello-world result
+      ansible.builtin.debug:
+        msg: 'Docker test run successful'
+      when: common_docker_test_run | default(false) and common_docker_hello_world.rc == 0

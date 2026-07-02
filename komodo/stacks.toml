@@ -1,0 +1,284 @@
+# ============================================================================
+# Komodo Resource Sync — Stacks (one per service)
+# ============================================================================
+# Each [[stack]] pins a service to its server, points at its compose file in
+# this repo, and supplies env. Env uses [[NAME]] interpolation:
+#   - [[TZ]] / [[APPDATA_DIR]] / [[REGISTRY_IMAGE]] -> Komodo Variables (committed, non-secret)
+#   - [[BW_DB_PASSWORD]] etc.                       -> periphery [secrets] (host-local, from Vault)
+#
+# DEPLOY MODEL — single Procedure, not per-stack webhooks
+# ------------------------------------------------------
+# These [[stack]] entries intentionally set NEITHER `deploy = true` NOR a
+# per-stack `/deploy` webhook. Deploys are driven by the `Deploy On Push`
+# Procedure (komodo/procedures.toml), which a single GitLab webhook triggers on
+# push to main. That Procedure runs BatchDeployStackIfChanged (pattern "*"):
+# Periphery pulls the repo on each target host and redeploys ONLY the stacks
+# whose compose file (or tracked config_files) changed since the last deploy.
+#
+# A single batch Procedure deploys all changed stacks. This is a MONOREPO and a
+# git webhook fires on EVERY push to the branch (Komodo filters by branch, never
+# by path), so one batch covers every stack without per-stack webhook
+# bookkeeping. See komodo/README.md (§Deploy flow) and komodo/procedures.toml
+# for the full model.
+#
+# We deliberately do NOT use `auto_update` (the image-registry poller) — image
+# tags are pinned in the compose files and bumped via Renovate PRs, so the
+# git push is the only deploy trigger.
+#
+# `after = [...]` on a [[stack]] is only honored by ResourceSync-driven deploys
+# (deploy = true), which we don't use — so it is omitted here. For a coordinated
+# primary-then-secondary HA rollout, use the `Rollout DNS HA` Procedure
+# (komodo/procedures.toml), whose sequential stages give that ordering.
+#
+# NOTE: each `environment` block below maps a service's docker-compose ${VARS}
+# to their sources — non-secret values inline or in variables.toml, secret
+# names resolved from the host's periphery [secrets] (host_vars/<svc>.yml).
+# ============================================================================
+
+# ----------------------------------------------------------------------------
+# DNS — Technitium (authoritative HA pair)
+# ----------------------------------------------------------------------------
+[[stack]]
+name = "technitium-1"
+tags = ["dns"]
+[stack.config]
+server = "technitium-1"
+linked_repo = "proxmox-infra"
+file_paths = ["services/technitium-1/docker-compose.yml"]
+environment = """
+TZ = [[TZ]]
+APPDATA_DIR = [[APPDATA_DIR]]
+DNS_SERVER_DOMAIN = ns1.example.com
+DNS_SERVER_ADMIN_PASSWORD = [[DNS_SERVER_ADMIN_PASSWORD]]
+"""
+
+[[stack]]
+name = "technitium-2"
+tags = ["dns"]
+[stack.config]
+server = "technitium-2"
+linked_repo = "proxmox-infra"
+file_paths = ["services/technitium-2/docker-compose.yml"]
+environment = """
+TZ = [[TZ]]
+APPDATA_DIR = [[APPDATA_DIR]]
+DNS_SERVER_DOMAIN = ns2.example.com
+DNS_SERVER_ADMIN_PASSWORD = [[DNS_SERVER_ADMIN_PASSWORD]]
+"""
+
+# ----------------------------------------------------------------------------
+# DNS — AdGuard (filtering HA pair)
+# ----------------------------------------------------------------------------
+[[stack]]
+name = "adguard-1"
+tags = ["dns"]
+[stack.config]
+server = "adguard-1"
+linked_repo = "proxmox-infra"
+file_paths = ["services/adguard-1/docker-compose.yml"]
+environment = """
+TZ = [[TZ]]
+APPDATA_DIR = [[APPDATA_DIR]]
+REGISTRY_IMAGE = [[REGISTRY_IMAGE]]
+"""
+
+[[stack]]
+name = "adguard-2"
+tags = ["dns"]
+[stack.config]
+server = "adguard-2"
+linked_repo = "proxmox-infra"
+file_paths = ["services/adguard-2/docker-compose.yml"]
+environment = """
+TZ = [[TZ]]
+APPDATA_DIR = [[APPDATA_DIR]]
+REGISTRY_IMAGE = [[REGISTRY_IMAGE]]
+"""
+
+# ----------------------------------------------------------------------------
+# GitLab CE (self-hosted Git forge — serves source.example.com)
+# ----------------------------------------------------------------------------
+# The full instance config (external_url, ssh port, memory tuning) lives inline
+# in services/gitlab/docker-compose.yml as GITLAB_OMNIBUS_CONFIG (non-secret),
+# so only TZ/APPDATA_DIR + the root-password secret are supplied here.
+[[stack]]
+name = "gitlab"
+tags = ["git"]
+[stack.config]
+server = "gitlab"
+linked_repo = "proxmox-infra"
+file_paths = ["services/gitlab/docker-compose.yml"]
+environment = """
+TZ = [[TZ]]
+APPDATA_DIR = [[APPDATA_DIR]]
+GITLAB_ROOT_PASSWORD = [[GITLAB_ROOT_PASSWORD]]
+"""
+
+# ----------------------------------------------------------------------------
+# GitLab Runner (dedicated CI host)
+# ----------------------------------------------------------------------------
+# CI_SERVER_URL is non-secret (kept inline). GitLab serves source.example.com.
+[[stack]]
+name = "gitlab-runner"
+tags = ["ci"]
+[stack.config]
+server = "gitlab-runner"
+linked_repo = "proxmox-infra"
+file_paths = ["services/gitlab-runner/docker-compose.yml"]
+environment = """
+TZ = [[TZ]]
+APPDATA_DIR = [[APPDATA_DIR]]
+CI_SERVER_URL = https://source.example.com
+GITLAB_RUNNER_TOKEN = [[GITLAB_RUNNER_TOKEN]]
+"""
+
+# ----------------------------------------------------------------------------
+# Bitwarden (password manager)
+# ----------------------------------------------------------------------------
+[[stack]]
+name = "bitwarden"
+tags = ["password-manager"]
+[stack.config]
+server = "bitwarden"
+linked_repo = "proxmox-infra"
+file_paths = ["services/bitwarden/docker-compose.yml"]
+environment = """
+TZ = [[TZ]]
+APPDATA_DIR = [[APPDATA_DIR]]
+BW_DOMAIN = bitwarden.example.com
+BW_ENABLE_ADMIN = true
+BW_ENABLE_SSO = false
+BW_DISABLE_REGISTRATION = false
+BW_ADMIN_EMAIL = admin@example.com
+BW_DB_PROVIDER = postgresql
+BW_DB_SERVER = db
+BW_DB_DATABASE = bitwarden_vault
+BW_DB_USERNAME = bitwarden
+BW_DB_PASSWORD = [[BW_DB_PASSWORD]]
+BW_INSTALLATION_ID = [[BW_INSTALLATION_ID]]
+BW_INSTALLATION_KEY = [[BW_INSTALLATION_KEY]]
+BW_SMTP_HOST = smtp
+BW_SMTP_PORT = 25
+BW_SMTP_SSL = false
+BW_SMTP_USERNAME =
+BW_SMTP_PASSWORD =
+BW_SMTP_REPLY_TO = noreply@vault.example.com
+BACKUP_CRON_SCHEDULE = 0 2 * * *
+BACKUP_ON_STARTUP = false
+BACKUP_LOCAL_RETENTION = 7
+BACKUP_NAS_TARGET =
+BACKUP_NAS_RETENTION = 14
+BACKUP_R2_BUCKET = bitwarden-backups
+BACKUP_R2_ENDPOINT = https://04376f2b0f3e66492fef38704902782b.r2.cloudflarestorage.com
+BACKUP_R2_ACCESS_KEY = [[BACKUP_R2_ACCESS_KEY]]
+BACKUP_R2_SECRET_KEY = [[BACKUP_R2_SECRET_KEY]]
+BACKUP_R2_RETENTION = 30
+"""
+
+# ----------------------------------------------------------------------------
+# Paperless-ngx (document management)
+# ----------------------------------------------------------------------------
+[[stack]]
+name = "paperless-ngx"
+tags = ["document-management"]
+[stack.config]
+server = "paperless-ngx"
+linked_repo = "proxmox-infra"
+file_paths = ["services/paperless-ngx/docker-compose.yml"]
+environment = """
+APPDATA_DIR = [[APPDATA_DIR]]
+POSTGRES_DB = paperless
+POSTGRES_USER = paperless
+POSTGRES_PASSWORD = [[POSTGRES_PASSWORD]]
+USERMAP_UID = 1000
+USERMAP_GID = 1000
+PAPERLESS_URL = https://paperless.example.com
+PAPERLESS_SECRET_KEY = [[PAPERLESS_SECRET_KEY]]
+PAPERLESS_TIME_ZONE = [[TZ]]
+PAPERLESS_OCR_LANGUAGE = eng
+PAPERLESS_OCR_LANGUAGES = deu srp srp_latn
+PAPERLESS_ADMIN_USER = maintainer
+PAPERLESS_ADMIN_MAIL = maintainer@example.com
+PAPERLESS_ADMIN_PASSWORD = [[PAPERLESS_ADMIN_PASSWORD]]
+PAPERLESS_AI_API_TOKEN = [[PAPERLESS_AI_API_TOKEN]]
+AI_PROVIDER = custom
+AZURE_API_KEY =
+AZURE_ENDPOINT =
+AZURE_DEPLOYMENT_NAME =
+AZURE_API_VERSION =
+OPENAI_API_KEY =
+OPENAI_MODEL =
+OLLAMA_API_URL =
+OLLAMA_MODEL =
+CUSTOM_API_KEY = [[CUSTOM_API_KEY]]
+CUSTOM_BASE_URL = https://litellm.example.com/v1
+CUSTOM_MODEL = gpt-5.4-mini
+PAPERLESS_AI_SCAN_INTERVAL = */30 * * * *
+PAPERLESS_AI_PROCESS_PREDEFINED = no
+PAPERLESS_AI_ADD_TAG = yes
+PAPERLESS_AI_TAGS =
+"""
+# AI_PROVIDER=custom routes via the LiteLLM proxy; the azure/openai/ollama vars
+# are kept (empty) to mirror the source env exactly.
+
+# ----------------------------------------------------------------------------
+# Omni (Sidero Talos management plane) — host-specific and fragile: depends on
+# the manual /dev/net/tun device + on-host GPG/TLS files (see services/omni/README.md).
+# ----------------------------------------------------------------------------
+[[stack]]
+name = "omni"
+tags = ["talos", "management"]
+[stack.config]
+server = "omni"
+linked_repo = "proxmox-infra"
+file_paths = ["services/omni/docker-compose.yml"]
+environment = """
+OMNI_OIDC_CLIENT_ID = 587244d7-861e-473b-a82c-221ebfa3b459
+OMNI_EULA_NAME = Maintainer
+OMNI_EULA_EMAIL = maintainer@example.com
+OMNI_OIDC_CLIENT_SECRET = [[OMNI_OIDC_CLIENT_SECRET]]
+"""
+# OMNI_OIDC_CLIENT_ID is the Pocket ID `omni` client_id (not secret) — kept inline.
+# Omni needs /dev/net/tun (added manually on the Proxmox host) — see
+# services/omni/README.md; unaffected by the deploy-tool change.
+
+# ----------------------------------------------------------------------------
+# Semaphore (Ansible UI)
+# ----------------------------------------------------------------------------
+[[stack]]
+name = "semaphore"
+tags = ["ansible"]
+[stack.config]
+server = "semaphore"
+linked_repo = "proxmox-infra"
+file_paths = ["services/semaphore/docker-compose.yml"]
+environment = """
+SEMAPHORE_ADMIN = admin
+SEMAPHORE_ADMIN_NAME = Admin
+SEMAPHORE_ADMIN_EMAIL = admin@example.com
+SEMAPHORE_ADMIN_PASSWORD = [[SEMAPHORE_ADMIN_PASSWORD]]
+"""
+
+# ----------------------------------------------------------------------------
+# Hermes Agent (NousResearch) — telegram gateway via the LiteLLM custom provider
+# ----------------------------------------------------------------------------
+# OPENAI_API_KEY / TELEGRAM_BOT_TOKEN are periphery [secrets] (host_vars/hermes.yml).
+# Non-secret OPENAI_BASE_URL / TELEGRAM_ALLOWED_USERS are inline. config.yaml is a
+# committed file bind-mounted into the container (services/hermes/config.yaml).
+[[stack]]
+name = "hermes"
+tags = ["agent"]
+[stack.config]
+server = "hermes"
+linked_repo = "proxmox-infra"
+file_paths = ["services/hermes/docker-compose.yml"]
+environment = """
+TZ = [[TZ]]
+APPDATA_DIR = [[APPDATA_DIR]]
+HERMES_PUID = 1000
+HERMES_PGID = 1000
+OPENAI_BASE_URL = https://litellm.example.com
+TELEGRAM_ALLOWED_USERS = 7358940953
+OPENAI_API_KEY = [[OPENAI_API_KEY]]
+TELEGRAM_BOT_TOKEN = [[TELEGRAM_BOT_TOKEN]]
+"""

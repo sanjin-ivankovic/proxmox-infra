@@ -1,0 +1,48 @@
+# ============================================================================
+# Docker Services .gitignore
+# ============================================================================
+# GitOps: Ignore secrets and runtime data, keep configuration templates
+# ============================================================================
+
+# Environment files with secrets (GitOps: never commit secrets)
+.env
+*.env
+!*.env.example
+!*.env.template
+
+# Runtime data directories
+appdata/
+data/
+logs/
+*.log
+
+# Docker volumes (if mounted locally)
+volumes/
+_data/
+_data*/
+
+# Service-specific secrets
+secrets/
+*.secret
+*.key
+
+# Temporary files
+*.tmp
+*.temp
+
+# Keep configuration templates
+!docker-compose.yml
+!docker-compose.yaml
+!*.example
+!*.template
+!README.md
+
+# ============================================================================
+# Deprecated Services (excluded from pipeline processing)
+# ============================================================================
+# unbound-1 and unbound-2 are integrated into adguard hosts
+# pihole-1 and pihole-2 are no longer used
+pihole-1/
+pihole-2/
+unbound-1/
+unbound-2/

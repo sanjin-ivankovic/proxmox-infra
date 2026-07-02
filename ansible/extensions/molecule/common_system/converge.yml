@@ -1,0 +1,16 @@
+---
+# Converge: apply common_system via FQCN.
+# Two steps depend on the host environment rather than the role's logic and are
+# disabled for the minimal test container: the outbound-ICMP network check, and
+# the ping-capability step (the slim Debian image ships no /bin/ping). The rest
+# (OS validation, APT update, base packages, backup dir) runs for real.
+- name: Converge
+  hosts: all
+  become: true
+  vars:
+    common_system_network_check_enabled: false
+    common_system_enable_ping_capability: false
+  tasks:
+    - name: Apply the common_system role
+      ansible.builtin.include_role:
+        name: homelab.proxmox.common_system

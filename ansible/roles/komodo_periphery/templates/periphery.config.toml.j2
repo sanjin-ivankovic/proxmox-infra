@@ -1,0 +1,28 @@
+## {{ ansible_managed }}
+## Komodo Periphery agent config — managed by the komodo_periphery Ansible role.
+## Docs: https://komo.do/docs/setup/connect-servers
+
+root_directory = "{{ komodo_periphery_root_dir }}"
+
+## Inbound listener (Komodo Core dials in to this).
+server_enabled = true
+port = {{ komodo_periphery_port }}
+bind_ip = "{{ komodo_periphery_bind_ip }}"
+ssl_enabled = {{ komodo_periphery_ssl_enabled | lower }}
+
+## Only Komodo Core may connect.
+allowed_ips = {{ komodo_periphery_allowed_ips | to_json }}
+
+## v2 PKI: accept connections signed by Core's public key. The agent's own
+## private key auto-generates at ${root_directory}/keys/periphery.key.
+{% if komodo_periphery_core_public_keys %}
+core_public_keys = ["{{ komodo_periphery_core_public_keys }}"]
+{% else %}
+# core_public_keys = ["<paste Core public key>"]  # set vault_komodo_core_public_key
+{% endif %}
+
+## Host-local secrets — referenced from stacks as [[NAME]]. Never sent to Core.
+[secrets]
+{% for name, value in komodo_periphery_secrets | dictsort %}
+{{ name }} = "{{ value }}"
+{% endfor %}

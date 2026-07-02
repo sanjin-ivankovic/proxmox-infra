@@ -1,0 +1,69 @@
+---
+# ansible/roles/komodo_core/tasks/main.yml
+#
+# Deploys Komodo Core + FerretDB v2 via docker-compose on the komodo host.
+
+- name: Komodo Core — directories
+  tags: [komodo, core]
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: root
+    group: root
+    mode: '0750'
+  loop:
+    - "{{ komodo_core_dir }}"
+    - "{{ komodo_core_data_dir }}"
+    # postgres uses a host bind-mount (documentdb image inits as root, owns it).
+    # ferretdb state + Core keys use named volumes (those containers run as
+    # uid 1000 and must own their dirs) — declared in compose, not here.
+    - "{{ komodo_core_data_dir }}/postgres"
+
+- name: Komodo Core — render compose + config
+  tags: [komodo, core, config]
+  block:
+    - name: Render docker-compose.yaml
+      ansible.builtin.template:
+        src: compose.yaml.j2
+        dest: "{{ komodo_core_dir }}/docker-compose.yaml"
+        owner: root
+        group: root
+        mode: '0640'
+      notify: restart komodo core
+
+    - name: Render compose.env (secrets)
+      ansible.builtin.template:
+        src: compose.env.j2
+        dest: "{{ komodo_core_dir }}/compose.env"
+        owner: root
+        group: root
+        mode: '0600'
+      notify: restart komodo core
+
+    - name: Render core.config.toml (git provider)
+      ansible.builtin.template:
+        src: core.config.toml.j2
+        dest: "{{ komodo_core_dir }}/core.config.toml"
+        owner: root
+        group: root
+        mode: '0600'
+      notify: restart komodo core
+
+- name: Komodo Core — deploy stack
+  tags: [komodo, core, deploy]
+  community.docker.docker_compose_v2:
+    project_src: "{{ komodo_core_dir }}"
+    state: present
+    pull: missing
+
+- name: Komodo Core — post-install handshake reminder
+  tags: [komodo, core]
+  ansible.builtin.debug:
+    msg:
+      - "✓ Komodo Core deployed at {{ komodo_core_host }}"
+      - "NEXT (one-time): capture Core's public key for the periphery handshake."
+      - "  Core's keypair lives in the 'komodo_keys' named volume at /config/keys."
+      - "  Read the public key (or grep the startup log for 'Public Key:'):"
+      - "    ssh {{ inventory_hostname }} 'sudo docker exec komodo-core-1 cat /config/keys/core.pub'"
+      - "  → store it in Vault as vault_komodo_core_public_key"
+      - "  → then run playbooks/lxc/10-komodo-periphery.yml per host"

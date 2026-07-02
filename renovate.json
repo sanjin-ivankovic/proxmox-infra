@@ -1,0 +1,331 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "description": "Renovate configuration for Proxmox infrastructure automation (Terraform, Docker Compose, Ansible)",
+  "extends": [
+    "local>homelab/renovate",
+    "gitlab>renovate-bot/renovate-runner"
+  ],
+  "dependencyDashboardTitle": "Renovate Dashboard: Proxmox Infrastructure",
+  "dependencyDashboardHeader": "Tracks dependency updates for Proxmox infrastructure automation.\n\n**After merging**: Test changes in staging before applying to production. See repo README for deployment procedures.\n\n---",
+  "dependencyDashboardFooter": "---\n\n**Resources**: [Proxmox VE](https://pve.example.com) | [Renovate Config](https://source.example.com/example-org/proxmox-infra/src/branch/main/renovate.json)",
+  "ignorePaths": [
+    "**/.git/**",
+    "**/test/**",
+    "**/tests/**",
+    "**/.archive/**",
+    "services/_templates/**"
+  ],
+  "enabledManagers": [
+    "docker-compose",
+    "dockerfile",
+    "terraform",
+    "ansible-galaxy",
+    "custom.regex",
+    "gitlabci",
+    "pre-commit"
+  ],
+  "customManagers": [
+    {
+      "description": "Extract tool versions from Dockerfile ARG variables with Renovate annotations",
+      "customType": "regex",
+      "managerFilePatterns": ["/Dockerfile$/"],
+      "matchStrings": [
+        "#\\s*renovate:\\s*datasource=(?<datasource>\\S+)\\s+depName=(?<depName>\\S+)(?:\\s+versioning=(?<versioning>\\S+))?(?:\\s+extractVersion=(?<extractVersion>\\S+))?\\s*\\n\\s*ARG\\s+\\w+=[\"']?(?<currentValue>[^\"'\\s]+)[\"']?"
+      ],
+      "versioningTemplate": "{{#if versioning}}{{{versioning}}}{{else}}semver{{/if}}"
+    },
+    {
+      "description": "Extract Unbound version from the unbound + unbound-recursive Dockerfiles (kept in lockstep)",
+      "customType": "regex",
+      "managerFilePatterns": ["/^docker/unbound(-recursive)?/Dockerfile$/"],
+      "matchStrings": ["ARG UNBOUND_VERSION=(?<currentValue>[0-9.]+)"],
+      "datasourceTemplate": "github-tags",
+      "depNameTemplate": "NLnetLabs/unbound",
+      "extractVersionTemplate": "^release-(?<version>.+)$",
+      "versioningTemplate": "semver"
+    },
+    {
+      "description": "Extract OpenSSL version from the unbound + unbound-recursive Dockerfiles (kept in lockstep)",
+      "customType": "regex",
+      "managerFilePatterns": ["/^docker/unbound(-recursive)?/Dockerfile$/"],
+      "matchStrings": ["ARG OPENSSL_VERSION=(?<currentValue>[0-9.]+)"],
+      "datasourceTemplate": "github-releases",
+      "depNameTemplate": "openssl/openssl",
+      "extractVersionTemplate": "^openssl-(?<version>.+)$",
+      "versioningTemplate": "semver"
+    },
+    {
+      "description": "Extract Debian base image version from the unbound + unbound-recursive Dockerfile ARGs (kept in lockstep)",
+      "customType": "regex",
+      "managerFilePatterns": ["/^docker/unbound(-recursive)?/Dockerfile$/"],
+      "matchStrings": ["ARG DEBIAN_VERSION=(?<currentValue>[a-z0-9.-]+)"],
+      "datasourceTemplate": "docker",
+      "depNameTemplate": "debian",
+      "versioningTemplate": "docker"
+    },
+    {
+      "description": "Extract dnscrypt-proxy version from docker/dnscrypt-proxy/Dockerfile",
+      "customType": "regex",
+      "managerFilePatterns": ["/^docker/dnscrypt-proxy/Dockerfile$/"],
+      "matchStrings": ["ARG DNSCRYPT_PROXY_VERSION=(?<currentValue>[0-9.]+)"],
+      "datasourceTemplate": "github-releases",
+      "depNameTemplate": "DNSCrypt/dnscrypt-proxy",
+      "versioningTemplate": "semver"
+    },
+    {
+      "description": "Extract Debian base image version+digest from docker/dnscrypt-proxy/Dockerfile ARG",
+      "customType": "regex",
+      "managerFilePatterns": ["/^docker/dnscrypt-proxy/Dockerfile$/"],
+      "matchStrings": ["ARG DEBIAN_VERSION=(?<currentValue>[a-z0-9.-]+)(?:@(?<currentDigest>sha256:[a-f0-9]+))?"],
+      "datasourceTemplate": "docker",
+      "depNameTemplate": "debian",
+      "versioningTemplate": "docker"
+    },
+    {
+      "description": "Extract Terraform provider versions from Terragrunt root.hcl heredoc",
+      "customType": "regex",
+      "managerFilePatterns": ["terraform/root.hcl"],
+      "matchStrings": [
+        "source\\s+=\\s+\"(?<depName>[^\"]+)\"\\s+version\\s+=\\s+\"(?<currentValue>[^\"]+)\""
+      ],
+      "datasourceTemplate": "terraform-provider",
+      "versioningTemplate": "hashicorp"
+    },
+    {
+      "description": "Extract Talos version from Ansible group vars (Talos cluster only; the ansible/lxc inventory carries no version keys).",
+      "customType": "regex",
+      "managerFilePatterns": ["ansible/talos/inventory/group_vars/all/vars.yml"],
+      "matchStrings": ["talos_version:\\s*\"(?<currentValue>v[0-9.]+)\""],
+      "datasourceTemplate": "github-releases",
+      "depNameTemplate": "siderolabs/talos",
+      "versioningTemplate": "semver"
+    },
+    {
+      "description": "Extract Kubernetes version from Ansible group vars (Talos cluster only; the ansible/lxc inventory carries no version keys).",
+      "customType": "regex",
+      "managerFilePatterns": ["ansible/talos/inventory/group_vars/all/vars.yml"],
+      "matchStrings": ["kubernetes_version:\\s*\"(?<currentValue>v[0-9.]+)\""],
+      "datasourceTemplate": "github-releases",
+      "depNameTemplate": "kubernetes/kubernetes",
+      "versioningTemplate": "semver"
+    }
+  ],
+  "packageRules": [
+    {
+      "description": "Infrastructure updates - graduated stabilization soak by update type (patch 1d). Trusted vendor releases (Talos, Kubernetes, Terraform providers, Docker images, Ansible collections) still land quickly, but a short soak guards against same-day broken releases; CI catches breakage before merge. The .ci/docker/Dockerfile build base keeps its own 3/7/14-day delays from the shared preset. Critical OS/cluster deps (Talos, Kubernetes) keep their own rules below.",
+      "matchFileNames": ["services/**", "docker/**/Dockerfile", "terraform/**", "ansible/**"],
+      "matchUpdateTypes": ["patch"],
+      "minimumReleaseAge": "1 day"
+    },
+    {
+      "description": "Infrastructure updates - minor soak.",
+      "matchFileNames": ["services/**", "docker/**/Dockerfile", "terraform/**", "ansible/**"],
+      "matchUpdateTypes": ["minor"],
+      "minimumReleaseAge": "3 days"
+    },
+    {
+      "description": "Infrastructure updates - major soak.",
+      "matchFileNames": ["services/**", "docker/**/Dockerfile", "terraform/**", "ansible/**"],
+      "matchUpdateTypes": ["major"],
+      "minimumReleaseAge": "7 days"
+    },
+    {
+      "description": "Docker digest pinning - Pin floating tags to reproducible digests for infrastructure reliability",
+      "matchDatasources": ["docker"],
+      "matchUpdateTypes": ["pin"],
+      "groupName": "pin-docker-digests",
+      "commitMessagePrefix": "fix({{parentDir}}):",
+      "labels": ["ci", "pinning"],
+      "prPriority": 9
+    },
+    {
+      "description": "Docker Compose service images - Grouped by service directory",
+      "matchFileNames": ["services/*/docker-compose.yml"],
+      "matchDatasources": ["docker"],
+      "matchUpdateTypes": ["major", "minor", "patch", "digest"],
+      "groupName": "{{parentDir}}-images",
+      "commitMessagePrefix": "chore({{parentDir}}):",
+      "additionalBranchPrefix": "{{parentDir}}-",
+      "labels": ["docker", "service"],
+      "prPriority": 3
+    },
+    {
+      "description": "Custom Docker base images - Build validation",
+      "matchFileNames": ["docker/*/Dockerfile"],
+      "matchDatasources": ["docker"],
+      "matchUpdateTypes": ["major", "minor", "patch", "digest"],
+      "groupName": "docker-base-{{parentDir}}",
+      "commitMessagePrefix": "build(docker):",
+      "labels": ["docker", "build"],
+      "prPriority": 0
+    },
+    {
+      "description": "Debian base image for Unbound - Disable built-in dockerfile manager (handled by custom regex)",
+      "matchFileNames": ["docker/unbound/Dockerfile", "docker/unbound-recursive/Dockerfile"],
+      "matchDatasources": ["docker"],
+      "matchDepNames": ["debian"],
+      "matchManagers": ["dockerfile"],
+      "enabled": false
+    },
+    {
+      "description": "Debian base image for Unbound - Base OS updates",
+      "matchFileNames": ["docker/unbound/Dockerfile", "docker/unbound-recursive/Dockerfile"],
+      "matchDatasources": ["docker"],
+      "matchDepNames": ["debian"],
+      "matchManagers": ["custom.regex"],
+      "groupName": "unbound-debian",
+      "commitMessagePrefix": "build(unbound):",
+      "pinDigests": false,
+      "labels": ["docker", "unbound", "base-image"],
+      "prPriority": 5
+    },
+    {
+      "description": "Unbound DNS resolver version - Core DNS service",
+      "matchFileNames": ["docker/unbound/Dockerfile", "docker/unbound-recursive/Dockerfile"],
+      "matchDatasources": ["github-tags"],
+      "matchDepNames": ["NLnetLabs/unbound"],
+      "groupName": "unbound-version",
+      "commitMessagePrefix": "build(unbound):",
+      "labels": ["unbound", "application"],
+      "prPriority": 10,
+      "postUpgradeTasks": {
+        "commands": ["scripts/renovate-update-sha256.sh unbound {{{newValue}}}"],
+        "fileFilters": ["docker/unbound/Dockerfile", "docker/unbound-recursive/Dockerfile"],
+        "executionMode": "update"
+      }
+    },
+    {
+      "description": "OpenSSL library version - Security library used by Unbound. Pinned to <4 until NLnet Labs ships an unbound release with OpenSSL 4.x support",
+      "matchFileNames": ["docker/unbound/Dockerfile", "docker/unbound-recursive/Dockerfile"],
+      "matchDatasources": ["github-releases"],
+      "matchDepNames": ["openssl/openssl"],
+      "allowedVersions": "<4",
+      "groupName": "unbound-openssl",
+      "commitMessagePrefix": "build(unbound):",
+      "labels": ["openssl", "security"],
+      "prPriority": 8,
+      "postUpgradeTasks": {
+        "commands": ["scripts/renovate-update-sha256.sh openssl {{{newValue}}}"],
+        "fileFilters": ["docker/unbound/Dockerfile", "docker/unbound-recursive/Dockerfile"],
+        "executionMode": "update"
+      }
+    },
+    {
+      "description": "dnscrypt-proxy version - Encrypted DNS proxy binary",
+      "matchFileNames": ["docker/dnscrypt-proxy/Dockerfile"],
+      "matchDatasources": ["github-releases"],
+      "matchDepNames": ["DNSCrypt/dnscrypt-proxy"],
+      "groupName": "dnscrypt-proxy-version",
+      "commitMessagePrefix": "build(dnscrypt-proxy):",
+      "labels": ["dnscrypt-proxy", "application"],
+      "prPriority": 10,
+      "postUpgradeTasks": {
+        "commands": ["scripts/renovate-update-sha256.sh dnscrypt-proxy {{{newValue}}}"],
+        "fileFilters": ["docker/dnscrypt-proxy/Dockerfile"],
+        "executionMode": "update"
+      }
+    },
+    {
+      "description": "Terraform unit versions.tf - Disabled because Terragrunt regenerates these from root.hcl on every init (root.hcl is the source of truth, tracked by the customManager above). The single-level glob deliberately excludes the hand-written modules/*/versions.tf, which Renovate DOES manage.",
+      "matchFileNames": ["terraform/*/versions.tf"],
+      "matchManagers": ["terraform"],
+      "enabled": false
+    },
+    {
+      "description": "Terraform providers - Grouped updates for IaC validation. root.hcl is the source of truth for unit-level provider constraints (the unit versions.tf are regenerated from it); the hand-written modules/*/versions.tf carry their own constraints and are bumped in the same group so they stay aligned.",
+      "matchFileNames": [
+        "terraform/root.hcl",
+        "terraform/*/modules/*/versions.tf"
+      ],
+      "matchDatasources": ["terraform-provider"],
+      "groupName": "terraform-providers",
+      "commitMessagePrefix": "chore(terraform):",
+      "labels": ["terraform", "infrastructure"],
+      "prPriority": -2
+    },
+    {
+      "description": "Ansible Galaxy collections - Configuration management",
+      "matchFileNames": ["ansible/requirements.yml"],
+      "matchDatasources": ["galaxy-collection"],
+      "groupName": "ansible-collections",
+      "commitMessagePrefix": "chore(ansible):",
+      "labels": ["ansible", "configuration"],
+      "prPriority": 2
+    },
+    {
+      "description": "Talos OS version - Critical cluster OS updates",
+      "matchDatasources": ["github-releases"],
+      "matchDepNames": ["siderolabs/talos"],
+      "commitMessagePrefix": "chore(talos):",
+      "labels": ["talos", "critical", "infrastructure"],
+      "prPriority": 10
+    },
+    {
+      "description": "Kubernetes version - Capped at v1.35.x. Active cluster is Talos 1.13.3 (k8s v1.35.5), which the cap fits; the bound also keeps headroom for the Rancher 2.14 support matrix (1.33-1.35) should the Rancher/K3s path be brought back from .archive/.",
+      "matchDatasources": ["github-releases"],
+      "matchDepNames": ["kubernetes/kubernetes"],
+      "allowedVersions": "< 1.36.0",
+      "commitMessagePrefix": "chore(kubernetes):",
+      "labels": ["kubernetes", "critical", "infrastructure"],
+      "prPriority": 10
+    },
+    {
+      "description": "CI Docker base image - Group with CI pipeline Docker versions for atomic updates. pinDigests:false (NOT scoped to one manager): the docker base ARG carries tag@sha256 and is seen by BOTH the native dockerfile manager (FROM docker:${DOCKER_VERSION}) and the custom.regex annotation; with pinDigests:true the inherited docker:pinDigests probes a malformed `manifests/<tag>@sha256:<digest>` HEAD that 404s ('Could not determine new digest'). Applying pinDigests:false to every manager for depName docker suppresses the probe; a real tag bump still rewrites tag+digest via the autoReplaceStringTemplate, so the digest stays current.",
+      "matchFileNames": [".ci/docker/Dockerfile"],
+      "matchDatasources": ["docker"],
+      "matchPackageNames": ["docker"],
+      "groupName": "docker-ci-images",
+      "commitMessagePrefix": "ci(docker):",
+      "pinDigests": false,
+      "labels": ["ci", "docker"],
+      "prPriority": 8
+    },
+    {
+      "description": "CI/CD components - track the homelab/ci-components @version pins in the include block. The gitlabci manager collapses every `component: source.example.com/homelab/ci-components/<name>@<ver>` line to a single homelab/ci-components dep (gitlab-tags datasource), so one grouped MR bumps all of them together. A short soak lets a fresh component release settle; CI proves the pipeline still renders before merge.",
+      "matchManagers": ["gitlabci"],
+      "matchPackageNames": ["homelab/ci-components"],
+      "groupName": "ci-components",
+      "minimumReleaseAge": "3 days",
+      "commitMessagePrefix": "ci(components):",
+      "labels": ["ci", "components"],
+      "prPriority": 8
+    },
+    {
+      "description": "PostgreSQL version pinning - bitwarden pinned to v16.x. The db (plain postgres) and backup (postgres-alpine) services share depName 'postgres'; they are kept on the SAME version (16.14) so Renovate doesn't hit a same-depName 'upgrade collision' (which neither grouping nor branch-splitting via matchCurrentValue resolved — it's a Renovate dedup limitation for two versions of one image in one file). Keeping them aligned is the reliable fix; this rule just holds the v16.x pin.",
+      "matchDatasources": ["docker"],
+      "matchDepNames": ["postgres"],
+      "matchFileNames": ["services/bitwarden/docker-compose.yml"],
+      "allowedVersions": "<17",
+      "groupName": "bitwarden-postgres"
+    },
+    {
+      "description": "PostgreSQL version pinning - patchmon pinned to v17.x",
+      "matchDatasources": ["docker"],
+      "matchDepNames": ["postgres"],
+      "matchFileNames": ["services/patchmon/docker-compose.yml"],
+      "allowedVersions": "<18"
+    },
+    {
+      "description": "PostgreSQL version pinning - paperless-ngx pinned to v18.x",
+      "matchDatasources": ["docker"],
+      "matchDepNames": ["postgres"],
+      "matchFileNames": ["services/paperless-ngx/docker-compose.yml"],
+      "allowedVersions": "<19"
+    },
+    {
+      "description": "Redis version pinning - patchmon pinned to v7.x",
+      "matchDatasources": ["docker"],
+      "matchDepNames": ["redis"],
+      "matchFileNames": ["services/patchmon/docker-compose.yml"],
+      "allowedVersions": "<8"
+    },
+    {
+      "description": "Redis version pinning - paperless-ngx pinned to v8.x",
+      "matchDatasources": ["docker"],
+      "matchDepNames": ["redis"],
+      "matchFileNames": ["services/paperless-ngx/docker-compose.yml"],
+      "allowedVersions": "<9"
+    }
+  ],
+  "prFooter": "This MR was created automatically by Renovate. Review changes carefully before merging.\n\n**After merging**:\n- Terraform changes: Review plan output before apply\n- Docker Compose: Verify service health after deployment\n- Custom Docker images: Rebuild and test before deploying"
+}

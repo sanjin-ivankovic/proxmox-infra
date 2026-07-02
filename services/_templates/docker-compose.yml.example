@@ -1,0 +1,42 @@
+---
+# Basic Service Template
+# Copy this template to services/<your-service>/ and customize
+
+name: myservice
+
+services:
+  myservice:
+    image: nginx:alpine # Replace with your image
+    container_name: myservice
+    restart: unless-stopped
+    ports:
+      - '80:80' # Adjust ports as needed
+    environment:
+      - TZ=${TZ:-UTC}
+      - PUID=${PUID:-1000}
+      - PGID=${PGID:-1000}
+      # Add your service-specific environment variables here
+    volumes:
+      - ${APPDATA_DIR}/myservice/config:/config
+      - ${APPDATA_DIR}/myservice/data:/data
+    networks:
+      - myservice_network
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'wget',
+          '--quiet',
+          '--tries=1',
+          '--spider',
+          'http://localhost:80',
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+networks:
+  myservice_network:
+    name: myservice_network
+    driver: bridge

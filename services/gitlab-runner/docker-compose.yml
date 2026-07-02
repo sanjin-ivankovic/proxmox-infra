@@ -1,0 +1,38 @@
+---
+# GitLab Runner — dedicated CI host (own LXC, isolated from the GitLab server)
+#
+# Deployment: Komodo stack `gitlab-runner` (komodo/stacks.toml), on merge to main.
+# Executor:   Docker, using THIS host's Docker socket. Safe because the runner
+#             runs on its own LXC — CI jobs cannot reach the GitLab server/data.
+# No inbound exposure: the runner dials out to GitLab.
+#
+# Registration (one-time, see services/gitlab/README.md / plan Part D):
+#   docker exec gitlab-runner gitlab-runner register --non-interactive \
+#     --url "$CI_SERVER_URL" --token "$CI_SERVER_TOKEN" \
+#     --executor docker --docker-image alpine:latest
+# Afterwards config.toml persists in the config volume and drives the runner;
+# gitlab-runner hot-reloads it, so no container restart is needed.
+
+name: gitlab-runner
+
+services:
+  gitlab-runner:
+    image: gitlab/gitlab-runner:v19.1.1@sha256:02a45975d3415e047f7f919368b0b659bb7cde4f3b4ee72ff4d24b4afc5dbc52
+    container_name: gitlab-runner
+    restart: unless-stopped
+    environment:
+      TZ: ${TZ}
+      # Non-secret GitLab URL (Komodo variable). FLIP: -> https://source.example.com
+      CI_SERVER_URL: ${CI_SERVER_URL}
+      # Runner authentication token (glrt-…) from the GitLab UI. Komodo secret.
+      CI_SERVER_TOKEN: ${GITLAB_RUNNER_TOKEN}
+    volumes:
+      - ${APPDATA_DIR}/gitlab-runner/config:/etc/gitlab-runner
+      - /var/run/docker.sock:/var/run/docker.sock
+    networks:
+      - gitlab_runner_network
+
+networks:
+  gitlab_runner_network:
+    name: gitlab_runner_network
+    driver: bridge

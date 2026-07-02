@@ -1,0 +1,40 @@
+---
+# ansible/roles/komodo_periphery/defaults/main.yml
+#
+# Installs the Komodo Periphery agent (binary + systemd unit) on a docker host
+# and renders /etc/komodo/periphery.config.toml. The agent is what Komodo Core
+# drives to deploy docker-compose stacks on this host.
+
+# Release to install (no "v" prefix; the installer uses it as-is). Pinned for
+# reproducibility; tracks the same Komodo release line as Core
+# (komodo_core_image_tag in the komodo_core role). Renovate-pinnable. Set to
+# "latest" only for a deliberate one-off test.
+komodo_periphery_version: "2.2.0"
+
+# Periphery agent root + listener (v2 defaults).
+komodo_periphery_root_dir: /etc/komodo
+komodo_periphery_port: 8120
+komodo_periphery_bind_ip: "[::]"
+komodo_periphery_ssl_enabled: true
+
+# Restrict inbound connections to Komodo Core only. Sourced from the
+# inventory-wide `komodo_core_ip` (group_vars/all/vars.yml) so the address is
+# defined once; the literal fallback keeps the role usable standalone.
+komodo_periphery_allowed_ips:
+  - "{{ komodo_core_ip | default('10.40.0.14') }}"
+
+# v2 PKI: the public key(s) of the Komodo Core(s) allowed to connect. Captured
+# from Core after first boot (/srv/komodo/data/keys/*.pub) and stored in Vault.
+# See the Core role's post-install handshake step.
+komodo_periphery_core_public_keys: "{{ vault_komodo_core_public_key | default('') }}"
+
+# Host-local secrets exposed to stacks via [[SECRET_NAME]] interpolation. These
+# NEVER leave the host (not sent to Core). Override per host in host_vars/<h>.yml
+# from Vault, e.g.:
+#   komodo_periphery_secrets:
+#     BW_DB_PASSWORD: "{{ vault_bitwarden_db_password }}"
+# Hosts with only non-secret env (adguard/technitium) leave this empty.
+komodo_periphery_secrets: {}
+
+# systemd unit name created by the installer.
+komodo_periphery_service_name: periphery

@@ -1,0 +1,28 @@
+---
+# Verify: assert common_system installed the base packages + backup dir.
+- name: Verify
+  hosts: all
+  become: true
+  tasks:
+    - name: Check that base packages are installed
+      ansible.builtin.command: "dpkg-query -W -f='${Status}' {{ item }}"
+      register: pkg_status
+      changed_when: false
+      failed_when: "'install ok installed' not in pkg_status.stdout"
+      loop:
+        - sudo
+        - curl
+        - ca-certificates
+        - rsync
+
+    - name: Check the backup directory exists
+      ansible.builtin.stat:
+        path: /root/backup
+      register: backup_dir
+
+    - name: Assert backup directory was created
+      ansible.builtin.assert:
+        that:
+          - backup_dir.stat.exists
+          - backup_dir.stat.isdir
+        fail_msg: "common_system did not create the backup directory"

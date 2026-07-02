@@ -1,0 +1,101 @@
+---
+# Argument specification for the common_users role.
+# Defaults here MUST match defaults/main.yml.
+argument_specs:
+  main:
+    short_description: Create the admin user and configure sudo on Debian/Ubuntu
+    description:
+      - Creates the steady-state non-root administrator account with the right
+        groups, passwordless sudo, bash aliases, and copies the root authorized
+        keys to the new user, then optionally locks/expires the root account.
+    author:
+      - Maintainer Name
+    options:
+      common_users_user:
+        type: str
+        required: false
+        default: "{{ user | default('maintainer') }}"
+        description:
+          - The administrator username to create. Defaults to the inventory-wide
+            C(user) variable (set in group_vars/all/vars.yml).
+      common_users_user_shell:
+        type: str
+        required: false
+        default: /bin/bash
+        description: Login shell for the administrator account.
+      common_users_user_password_hash:
+        type: str
+        required: false
+        description:
+          - Optional password hash for the account. When unset (the default),
+            no password is configured and login is key-only.
+      common_users_user_comment:
+        type: str
+        required: false
+        default: System Administrator
+        description: GECOS comment for the account.
+
+      common_users_groups:
+        type: list
+        elements: str
+        required: false
+        default:
+          - sudo
+          - adm
+          - systemd-journal
+        description: Supplementary groups the administrator is added to.
+
+      common_users_sudo_nopassword:
+        type: bool
+        required: false
+        default: true
+        description: Whether sudo is granted without a password prompt.
+      common_users_sudo_commands:
+        type: str
+        required: false
+        default: "ALL"
+        description: Commands the sudo rule permits.
+
+      common_users_root_ssh_keys_path:
+        type: path
+        required: false
+        default: /root/.ssh/authorized_keys
+        description: Source of authorized keys copied to the new user.
+      common_users_ssh_key_type:
+        type: str
+        required: false
+        default: ed25519
+        description: SSH key type referenced by the role.
+      common_users_ssh_key_bits:
+        type: int
+        required: false
+        default: 4096
+        description: Key size (applies to RSA-type keys; ignored for ed25519).
+
+      common_users_deploy_bash_aliases:
+        type: bool
+        required: false
+        default: true
+        description: Whether to deploy the managed bash_aliases file.
+      common_users_bashrc_additions:
+        type: list
+        elements: str
+        required: false
+        default: []
+        description: Extra lines appended to the user's bashrc.
+
+      common_users_lock_root_account:
+        type: bool
+        required: false
+        default: true
+        description: Whether to lock the root account after the admin is set up.
+      common_users_test_sudo_access:
+        type: bool
+        required: false
+        default: false
+        description: Whether to run a sudo self-test for the new user.
+      common_users_expire_root_password:
+        type: bool
+        required: false
+        default: true
+        description: Whether to expire the root password.

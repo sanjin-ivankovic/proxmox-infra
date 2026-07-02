@@ -1,0 +1,105 @@
+---
+# Paperless-NGX Document Management System
+# Open-source document management system for digitizing and organizing documents
+#
+# Deployment: Auto-deployed via GitLab CI/CD on push to main
+# Web UI: http://<host-ip>:8080
+
+services:
+  broker:
+    image: docker.io/library/redis:8.8.0@sha256:2838d5524559494f6f1cd66e97e76b200d64a633a8614200620755ed395daf32
+    restart: unless-stopped
+    volumes:
+      - ${APPDATA_DIR}/redis/data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+  db:
+    image: docker.io/library/postgres:18.4@sha256:4aabea78cf39b90e834caf3af7d602a18565f6fe2508705c8d01aa63245c2e20
+    restart: unless-stopped
+    volumes:
+      - ${APPDATA_DIR}/postgres/data:/var/lib/postgresql
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+  webserver:
+    image: ghcr.io/paperless-ngx/paperless-ngx:2.20.15@sha256:6c86cad803970ea782683a8e80e7403444c5bf3cf70de63b4d3c8e87500db92f
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+      broker:
+        condition: service_healthy
+    ports:
+      - '8080:8000'
+    volumes:
+      - ${APPDATA_DIR}/paperless-ngx/data:/usr/src/paperless/data
+      - ${APPDATA_DIR}/paperless-ngx/media:/usr/src/paperless/media
+      - ${APPDATA_DIR}/paperless-ngx/export:/usr/src/paperless/export
+      - ${APPDATA_DIR}/paperless-ngx/consume:/usr/src/paperless/consume
+    environment:
+      USERMAP_UID: ${USERMAP_UID}
+      USERMAP_GID: ${USERMAP_GID}
+      PAPERLESS_REDIS: redis://broker:6379
+      PAPERLESS_DBHOST: db
+      PAPERLESS_DBENGINE: postgresql
+      PAPERLESS_DBNAME: ${POSTGRES_DB}
+      PAPERLESS_DBUSER: ${POSTGRES_USER}
+      PAPERLESS_DBPASS: ${POSTGRES_PASSWORD}
+      PAPERLESS_URL: ${PAPERLESS_URL}
+      PAPERLESS_SECRET_KEY: ${PAPERLESS_SECRET_KEY}
+      PAPERLESS_TIME_ZONE: ${PAPERLESS_TIME_ZONE}
+      PAPERLESS_OCR_LANGUAGE: ${PAPERLESS_OCR_LANGUAGE}
+      PAPERLESS_OCR_LANGUAGES: ${PAPERLESS_OCR_LANGUAGES}
+      PAPERLESS_ADMIN_USER: ${PAPERLESS_ADMIN_USER}
+      PAPERLESS_ADMIN_MAIL: ${PAPERLESS_ADMIN_MAIL}
+      PAPERLESS_ADMIN_PASSWORD: ${PAPERLESS_ADMIN_PASSWORD}
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+  paperless-ai:
+    image: docker.io/clusterzx/paperless-ai:3.0.9@sha256:2b65888163fd59716f1c8285b31c5bd0b30c9c3c192c42b516688e3887d4ba60
+    restart: unless-stopped
+    depends_on:
+      webserver:
+        condition: service_healthy
+    security_opt:
+      - no-new-privileges:true
+    ports:
+      - '3000:3000'
+    volumes:
+      - ${APPDATA_DIR}/paperless-ai/data:/app/data
+    environment:
+      PUID: ${USERMAP_UID}
+      PGID: ${USERMAP_GID}
+      PAPERLESS_API_URL: http://webserver:8000/api
+      PAPERLESS_API_TOKEN: ${PAPERLESS_AI_API_TOKEN}
+      AI_PROVIDER: ${AI_PROVIDER}
+      AZURE_API_KEY: ${AZURE_API_KEY}
+      AZURE_ENDPOINT: ${AZURE_ENDPOINT}
+      AZURE_DEPLOYMENT_NAME: ${AZURE_DEPLOYMENT_NAME}
+      AZURE_API_VERSION: ${AZURE_API_VERSION}
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      OPENAI_MODEL: ${OPENAI_MODEL}
+      OLLAMA_API_URL: ${OLLAMA_API_URL}
+      OLLAMA_MODEL: ${OLLAMA_MODEL}
+      CUSTOM_API_KEY: ${CUSTOM_API_KEY}
+      CUSTOM_BASE_URL: ${CUSTOM_BASE_URL}
+      CUSTOM_MODEL: ${CUSTOM_MODEL}
+      SCAN_INTERVAL: ${PAPERLESS_AI_SCAN_INTERVAL}
+      PROCESS_PREDEFINED_DOCUMENTS: ${PAPERLESS_AI_PROCESS_PREDEFINED}
+      ADD_AI_PROCESSED_TAG: ${PAPERLESS_AI_ADD_TAG}
+      TAGS: ${PAPERLESS_AI_TAGS}

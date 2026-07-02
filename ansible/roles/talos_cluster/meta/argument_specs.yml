@@ -1,0 +1,70 @@
+---
+# Argument specification for the talos_cluster role.
+# Defaults here MUST match defaults/main.yml.
+argument_specs:
+  main:
+    short_description: Talos cluster operations via talosctl (action dispatcher)
+    description:
+      - >-
+        Runs one read-only Talos check selected by C(talos_cluster_action) —
+        validating that talosctl is installed, validating that the
+        talosconfig/kubeconfig exist, waiting for the Talos API on a node, or
+        running a node health check. All actions delegate to localhost and use
+        talosctl; none mutate the cluster.
+    author:
+      - Maintainer Name
+    options:
+      talos_cluster_action:
+        type: str
+        required: false
+        default: check_talosctl
+        choices:
+          - check_talosctl
+          - check_configs
+          - wait_for_api
+          - health_check
+        description: Which operation to run when the role is applied directly.
+      talos_cluster_node_ip:
+        type: str
+        required: false
+        default: ""
+        description:
+          - Node IP for the C(wait_for_api) and C(health_check) actions. Required
+            for those actions; ignored otherwise.
+
+      talos_cluster_api_timeout:
+        type: int
+        required: false
+        default: 300
+        description: Timeout (seconds) waiting for the Talos API.
+      talos_cluster_api_delay:
+        type: int
+        required: false
+        default: 20
+        description: Delay (seconds) before the API wait starts.
+      talos_cluster_api_port:
+        type: int
+        required: false
+        default: 50000
+        description: Talos API port to probe.
+      talos_cluster_bootstrap_timeout:
+        type: int
+        required: false
+        default: 600
+        description: Timeout (seconds) for cluster bootstrap.
+      talos_cluster_node_ready_timeout:
+        type: int
+        required: false
+        default: 300
+        description: Timeout (seconds) for a node to become ready.
+      talos_cluster_health_wait_timeout:
+        type: str
+        required: false
+        default: "5m"
+        description: Wait timeout (duration string) for the health check.
+
+      talos_cluster_check_kubeconfig:
+        type: bool
+        required: false
+        default: false
+        description: Whether check_configs also requires kubeconfig to exist.

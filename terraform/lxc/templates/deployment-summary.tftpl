@@ -1,0 +1,32 @@
+╔══════════════════════════════════════════════════════════════════╗
+║              LXC Containers Deployment Summary                   ║
+╚══════════════════════════════════════════════════════════════════╝
+
+📊 Compute Resources Deployed:
+────────────────────────────────
+  • LXC Containers:    ${lxc_count}
+  • Total:             ${lxc_count}
+
+🔑 SSH Keys Generated:
+────────────────────────────────
+  Location: ${ssh_key_directory}
+  Files:    ${ssh_key_count} key pairs
+
+📋 Ansible Inventory:
+────────────────────────────────
+  Status:   Ready for Dynamic Inventory
+  Hosts:    ${lxc_count} total
+
+🚀 Next Steps:
+────────────────────────────────
+  1. Review deployment:  terraform output container_details
+  2. Test SSH access:    terraform output quick_ssh
+  3. Configure hosts:    cd ../../ansible && make accept-host-keys
+  4. Bootstrap containers: cd ../../ansible && make bootstrap-host HOST=<hostname>
+  5. Deploy services:    git push origin main
+
+💡 Useful Commands:
+────────────────────────────────
+  • View SSH commands:   terraform output ssh_commands
+  • View IP addresses:   terraform output container_ips
+  • Generate inventory:  cd ../../ansible && make inventory

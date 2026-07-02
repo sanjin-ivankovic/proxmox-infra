@@ -1,0 +1,111 @@
+---
+# Hermes Agent (NousResearch) — autonomous AI agent in "gateway mode".
+# Telegram-only gateway backed by the homelab LiteLLM proxy (custom provider).
+# Migrated from a native uv/systemd install (the old hermes_agent Ansible role).
+#
+# Deployment: Komodo ("Deploy On Push"). Stack env comes from
+# komodo/variables.toml (non-secret pins) + the host periphery [secrets] block
+# (host_vars/hermes.yml) — see komodo/stacks.toml.
+#
+# Data: bind mount ${APPDATA_DIR}/hermes -> /opt/data holds .env, config.yaml,
+# sessions/, memories/, skills/, logs/, pairing/, etc. The image is stateless;
+# its install tree (/opt/hermes) is immutable/root-owned. Started fresh (no
+# migrated state) — Telegram is re-paired on first run.
+#
+# config.yaml: shipped as a committed, NON-SECRET services/hermes/config.yaml,
+# but SEEDED (copied once), not bind-mounted. Hermes's model is that /opt/data is
+# the single WRITABLE source of truth — the dashboard model picker, /model
+# persistence, and the image's first-boot schema migration all rewrite
+# config.yaml, so a read-only bind makes them fail (Errno 30). There is no
+# upstream "inject an initial config" mechanism, so we seed it ourselves: the
+# committed config is mounted read-only at /seed/config.yaml and an entrypoint
+# wrapper does `cp -n` into the volume (no-clobber) BEFORE exec'ing the real
+# image entrypoint. Git is the SEED, not the live source of truth — runtime
+# edits (dashboard / model switches) intentionally persist and may drift from
+# git. To reset to the committed config: delete ${APPDATA_DIR}/hermes/config.yaml
+# on the host and redeploy. The api_key is NOT in the file — supplied via
+# OPENAI_API_KEY env and pulled in with Hermes's ${OPENAI_API_KEY} interpolation.
+#
+# Why an entrypoint wrapper and not a separate init sidecar: a one-shot sidecar
+# leaves a permanently-Exited container in the compose project, which Komodo
+# aggregates into the stack State and renders as UNHEALTHY (red) even though the
+# gateway is fine. Folding the seed into the single hermes service keeps the
+# project to ONE container, so the stack reports a clean RUNNING. The wrapper
+# `exec`s /init so s6 stays PID 1 (signals + supervision unaffected).
+#
+# Ports: 8642 (OpenAI-compatible gateway API/health) is NOT published — a
+# telegram-only gateway does not need it. The web dashboard (9119) IS published,
+# but the dashboard has no auth of its own — the security boundary is the
+# in-cluster Traefik + Pocket ID SSO that fronts hermes.example.com (argo-apps,
+# apps/infra/external-services). HERMES_DASHBOARD_INSECURE=1 tells Hermes to skip
+# its own fail-closed auth gate because SSO sits in front; 9119 is only reached
+# on the LAN via that SSO route, never published publicly.
+
+name: hermes
+
+services:
+  hermes:
+    image: nousresearch/hermes-agent:v2026.6.19
+    container_name: hermes
+    # Seed config.yaml into the volume (cp -n, no-clobber) then hand off to the
+    # real image entrypoint. Runs as root (the image's default user) so it can
+    # write the volume and chown to the runtime uid; `exec /init …` makes s6 PID
+    # 1, so the seed adds no lingering container and leaves supervision intact.
+    # The committed config is mounted read-only at /seed/config.yaml below.
+    entrypoint:
+      - /bin/sh
+      - -c
+      - >
+        cp -n /seed/config.yaml /opt/data/config.yaml
+        && chown ${HERMES_PUID:-1000}:${HERMES_PGID:-1000} /opt/data/config.yaml;
+        exec /init /opt/hermes/docker/main-wrapper.sh "$$@"
+      - --
+    command: gateway run
+    restart: unless-stopped
+    environment:
+      TZ: ${TZ}
+      # Match the bind-mount owner (chowned to 1000:1000 on the host).
+      PUID: ${HERMES_PUID:-1000}
+      PGID: ${HERMES_PGID:-1000}
+      # LiteLLM provider — base_url has NO /v1 (Hermes appends the path itself).
+      # These -e values override anything in .env.
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      OPENAI_BASE_URL: ${OPENAI_BASE_URL}
+      # Telegram platform.
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}
+      TELEGRAM_ALLOWED_USERS: ${TELEGRAM_ALLOWED_USERS}
+      # Web dashboard — supervised by s6 alongside the gateway. Its own auth gate
+      # is disabled because Traefik + Pocket ID SSO is the boundary (argo-apps).
+      HERMES_DASHBOARD: '1'
+      HERMES_DASHBOARD_INSECURE: '1'
+    volumes:
+      # config.yaml lives INSIDE this volume (seeded by the entrypoint wrapper),
+      # writable so the dashboard / model switches / schema migrations can
+      # rewrite it.
+      - ${APPDATA_DIR}/hermes:/opt/data
+      # Committed config, read-only — the wrapper cp -n's it into the volume.
+      - ./config.yaml:/seed/config.yaml:ro
+    ports:
+      # Dashboard only — reached exclusively via the in-cluster Traefik SSO route
+      # at hermes.example.com. NOT the gateway API (8642), which stays unpublished.
+      - '9119:9119'
+    networks:
+      - hermes_network
+    deploy:
+      resources:
+        limits:
+          memory: 3G
+          cpus: '2.0'
+    healthcheck:
+      # Dashboard is published, so probe its HTTP port (also proves s6 is up).
+      # The image ships curl but NOT wget, so use curl.
+      test: ['CMD-SHELL', 'curl -fsS http://localhost:9119/ >/dev/null || exit 1']
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+networks:
+  hermes_network:
+    name: hermes_network
+    driver: bridge

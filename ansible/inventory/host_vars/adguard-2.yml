@@ -1,0 +1,8 @@
+---
+# ansible/inventory/host_vars/adguard-2.yml
+# AdGuard Home (DNS HA secondary) has no host-local secrets — its only env is
+# non-secret (TZ, APPDATA_DIR), pinned in komodo/stacks.toml. This file keeps
+# the per-host convention and gives a home for vault-backed secrets if AdGuard
+# later needs them (e.g. an admin/API credential).
+
+komodo_periphery_secrets: {}

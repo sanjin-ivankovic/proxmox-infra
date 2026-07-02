@@ -1,0 +1,85 @@
+# ============================================================================
+# Komodo Resource Sync — Procedures (deploy drivers)
+# ============================================================================
+# A Procedure composes executions into ordered Stages. Executions inside a stage
+# run in PARALLEL; stages run SEQUENTIALLY (Core waits for a stage to finish
+# before starting the next). Procedures are git-managed resources like Stacks —
+# Core reconciles them from this file via the ResourceSync.
+#
+# WHY THIS FILE EXISTS
+# --------------------
+# This repo is a MONOREPO: every service's compose lives under services/<svc>/
+# in example-org/proxmox-infra, and all Stacks point at that one repo. Komodo tracks
+# a Stack's deployed state by the repo's commit, and a git provider fires its
+# webhook on EVERY push to the branch (Komodo filters by branch, never by path).
+#
+# The previous model worked around this with one /deploy webhook PER stack (~10
+# webhooks). Every push still hit all of them; only DeployStackIfChanged's
+# content check kept the no-op stacks quiet. Lots of webhook bookkeeping for a
+# behaviour a single Procedure delivers natively.
+#
+# `BatchDeployStackIfChanged` matches many Stacks by wildcard/regex and redeploys
+# ONLY the ones whose compose content actually changed — exactly the old
+# behaviour, driven from ONE webhook instead of ten.
+#
+# WEBHOOK (replaces the 10 per-stack /deploy webhooks)
+# ----------------------------------------------------
+# On the GitLab repo (Settings > Webhooks), keep TWO webhooks total:
+#   1. ResourceSync /sync  -> .../listener/gitlab/sync/<resource-sync-id>/sync
+#   2. THIS procedure      -> .../listener/gitlab/procedure/<procedure-id>/main
+# secret = vault_komodo_webhook_secret. Procedures listen per BRANCH, so the
+# trailing path segment is the branch name (`main`), not an execution verb.
+#
+# BRANCH FILTER: each webhook also sets a GitLab "Push events branch filter" of
+# `main` (wildcard strategy = exact match). Komodo already rejects non-`main`
+# pushes (its per-branch listener logs "request branch does not match expected"),
+# so the filter is purely to stop GitLab sending renovate/* branch pushes that
+# would only be rejected — it removes that log noise without changing behavior.
+#
+# SCOPE NOTE: pattern = "*" matches ALL Stacks known to this Komodo Core. This
+# Core only manages this repo's Stacks, so that's correct. If you ever point the
+# same Core at Stacks from a different repo, narrow the pattern (e.g. a shared
+# name prefix) so unrelated Stacks aren't swept into this deploy.
+# ============================================================================
+
+[[procedure]]
+name = "Deploy On Push"
+description = "On push to main: redeploy only the stacks whose compose content changed (monorepo-safe, replaces per-stack /deploy webhooks)."
+tags = ["komodo", "deploy"]
+
+[[procedure.config.stage]]
+name = "Deploy changed stacks"
+executions = [
+  { execution.type = "BatchDeployStackIfChanged", execution.params.pattern = "*" },
+]
+
+# ----------------------------------------------------------------------------
+# Coordinated HA rollout (MANUAL trigger — not wired to a webhook)
+# ----------------------------------------------------------------------------
+# The on-push procedure above deploys all changed stacks in a single parallel
+# stage, so if one push ever touches BOTH members of an HA pair, both roll at
+# once. In practice each push edits one compose file, so this is rare — but when
+# you DO need a safe, primary-then-secondary rollout of the DNS pairs (e.g. a
+# shared base-image bump that touched both), run this Procedure from the Komodo
+# UI. Stage 1 rolls the primaries; Core waits for them healthy; Stage 2 rolls
+# the secondaries. Each is *IfChanged*, so unchanged members no-op.
+#
+# This is why we DON'T rely on the per-[[stack]] `after = [...]` field: `after`
+# is only honoured by ResourceSync-driven deploys (which we don't use), not by
+# Procedure/webhook deploys. Procedure stages give the same ordering explicitly.
+[[procedure]]
+name = "Rollout DNS HA"
+description = "Manual: safe primary-then-secondary rollout of the Technitium + AdGuard HA pairs."
+tags = ["komodo", "deploy", "dns", "ha"]
+
+[[procedure.config.stage]]
+name = "Primaries"
+executions = [
+  { execution.type = "BatchDeployStackIfChanged", execution.params.pattern = "technitium-1, adguard-1" },
+]
+
+[[procedure.config.stage]]
+name = "Secondaries"
+executions = [
+  { execution.type = "BatchDeployStackIfChanged", execution.params.pattern = "technitium-2, adguard-2" },
+]

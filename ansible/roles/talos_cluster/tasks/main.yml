@@ -1,0 +1,35 @@
+---
+# ============================================================================
+# talos_cluster — main entry point
+# ============================================================================
+# This is a proper role with an action dispatcher. Apply it directly and select
+# an operation via `talos_cluster_action`:
+#
+#   - ansible.builtin.include_role:
+#       name: homelab.proxmox.talos_cluster
+#     vars:
+#       talos_cluster_action: health_check
+#       talos_cluster_node_ip: "{{ ansible_host }}"
+#
+# Actions (each backed by a task file in this role):
+#   check_talosctl  - validate talosctl is installed (default)
+#   check_configs   - validate talosconfig/kubeconfig exist
+#   wait_for_api    - wait for the Talos API on talos_cluster_node_ip
+#   health_check    - run `talosctl health` against talos_cluster_node_ip
+#
+# The per-action task files remain individually includable via `tasks_from:`
+# for callers that prefer that (backward compatible).
+# ============================================================================
+
+- name: Validate the requested talos_cluster action
+  ansible.builtin.assert:
+    that:
+      - talos_cluster_action in _talos_cluster_actions
+    fail_msg: >-
+      Unknown talos_cluster_action '{{ talos_cluster_action }}'.
+      Valid actions: {{ _talos_cluster_actions | join(', ') }}
+    quiet: true
+  run_once: true
+
+- name: "Run talos_cluster action: {{ talos_cluster_action }}"
+  ansible.builtin.include_tasks: "{{ talos_cluster_action }}.yml"

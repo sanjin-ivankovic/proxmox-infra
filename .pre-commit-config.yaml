@@ -1,0 +1,122 @@
+# LOCAL developer hooks only. CI does NOT run pre-commit — the equivalent
+# checks run as native jobs in .gitlab-ci.yml (scan:secrets, lint:yaml/shell/
+# markdown/terraform/ansible, check:publish-tools-pinned, test:ci-scripts). Run
+# `cd ansible && make setup` (or `pre-commit install`) locally for fast
+# feedback; CI is the authoritative gate.
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+        # --allow-multiple-documents: k8s/compose YAML use multi-doc (---).
+        # No --unsafe here (unlike argo-apps): no custom-tag YAML in this
+        # repo, so we keep the stronger default object-construction check.
+        # (ansible vault files are gitignored / handled by ansible-lint.)
+        args: ['--allow-multiple-documents']
+        # .archive/ is frozen legacy content — not lint-enforced.
+        exclude: '^\.archive/'
+      - id: check-added-large-files
+        # Block accidentally committing big blobs; 500kb clears all legit files.
+        args: ['--maxkb=500']
+      - id: check-merge-conflict
+      - id: detect-private-key
+      # Catch filenames that collide on case-insensitive filesystems.
+      - id: check-case-conflict
+      # Normalize to LF; CRLF breaks shell scripts + diffs.
+      - id: mixed-line-ending
+        args: ['--fix=lf']
+      # A non-executable script (or executable non-script) is a latent bug.
+      # Exclude vendored .claude/ skill docs (we don't manage their perms)
+      # and .archive/ (frozen legacy scripts, not perm-managed).
+      - id: check-executables-have-shebangs
+        exclude: '^(\.claude/|\.archive/)'
+      - id: check-shebang-scripts-are-executable
+        exclude: '^(\.claude/|\.archive/)'
+      # Validate JSON syntax.
+      - id: check-json
+
+  - repo: https://github.com/adrienverge/yamllint
+    rev: v1.38.0
+    hooks:
+      - id: yamllint
+        # -c: centralize rules in .config/ (shared with CI + editor).
+        args: ['-c', '.config/.yamllint']
+
+  - repo: https://github.com/DavidAnson/markdownlint-cli2
+    rev: v0.22.1
+    hooks:
+      - id: markdownlint-cli2
+        # --config: same .config/ file the VS Code extension uses.
+        args: ['--config', '.config/.markdownlint-cli2.jsonc']
+
+  - repo: https://github.com/compilerla/conventional-pre-commit
+    rev: v4.4.0
+    hooks:
+      - id: conventional-pre-commit
+        # commit-msg stage: validates the commit MESSAGE, not files — runs
+        #   on `git commit`; `pre-commit run --all-files` (CI) skips it.
+        stages: [commit-msg]
+        # Positional args = allowed Conventional Commit types.
+        args: ['feat', 'fix', 'docs', 'refactor', 'chore', 'test', 'ci', 'build']
+
+  # Local system hooks — call binaries baked into the CI image (and
+  # present locally) instead of letting pre-commit build them at runtime.
+  # The upstream gitleaks hook is `language: golang` (compiles from
+  # source) and shellcheck-precommit is `language: docker_image` (needs a
+  # Docker daemon) — neither runs in the Argo emissary container.
+  # `language: system` reuses the pinned binary, so the image build-args
+  # are the single version source (Renovate tracks GITLEAKS_VERSION,
+  # SHELLCHECK_VERSION in .ci/docker/Dockerfile).
+  - repo: local
+    hooks:
+      - id: gitleaks
+        name: gitleaks (system)
+        # `git` (history) mode scans TRACKED content and respects
+        # .gitignore — matching the archived scan_secrets.py
+        # (`gitleaks detect --source .`, git mode). NOT `gitleaks dir`,
+        # which also scans untracked/gitignored files (e.g. a local
+        # talos/configs/kubeconfig) and reports false positives.
+        # --platform=gitlab matches the CI scan:secrets job and the real
+        # origin (source.example.com is GitLab) so finding links resolve to the
+        # correct /-/commit/<sha>#L<line> URLs.
+        entry: gitleaks git --platform=gitlab --config .config/.gitleaks.toml --gitleaks-ignore-path .config/.gitleaksignore --redact --verbose --exit-code 1 .
+        language: system
+        pass_filenames: false
+      - id: shellcheck
+        name: shellcheck (system)
+        entry: shellcheck --rcfile=.config/.shellcheckrc
+        language: system
+        types: [shell]
+        # .archive/ holds frozen legacy scripts — not lint-enforced.
+        exclude: '^\.archive/'
+      # ansible-lint + terraform_fmt as system hooks too: the upstream
+      # repo hooks build their own envs at runtime (ansible-lint =
+      # virtualenv -p python3.14, which fails to seed in the Alpine CI
+      # image; terraform_fmt wraps the terraform binary). Both binaries
+      # are baked into the CI image — reuse them. Versions pinned via
+      # ANSIBLE_LINT_VERSION / TERRAFORM_VERSION build-args.
+      - id: ansible-lint
+        name: ansible-lint (system)
+        # The playbooks reference roles by FQCN (homelab.proxmox.*), so the
+        # collection must be installed for ansible-lint's syntax-check to
+        # resolve them — build + install it into ansible/collections first, then
+        # lint from the repo root (matches the CI lint:ansible job).
+        # ANSIBLE_ROLES_PATH also keeps bare-name roles in ansible/roles/
+        # resolvable.
+        entry: bash -c 'cd ansible && ansible-galaxy collection build --force
+          --output-path /tmp/coll >/dev/null && ansible-galaxy collection install
+          /tmp/coll/homelab-proxmox-*.tar.gz -p ./collections --force >/dev/null &&
+          cd .. && env
+          ANSIBLE_COLLECTIONS_PATH="ansible/collections:$HOME/.ansible/collections:/usr/share/ansible/collections"
+          ANSIBLE_ROLES_PATH=ansible/roles ansible-lint -c ansible/.ansible-lint'
+        language: system
+        files: ^ansible/
+        pass_filenames: false
+      - id: terraform-fmt
+        name: terraform fmt (system)
+        entry: terraform fmt -check -recursive terraform/
+        language: system
+        files: ^terraform/
+        pass_filenames: false

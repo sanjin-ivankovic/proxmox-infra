@@ -1,0 +1,37 @@
+# ============================================================================
+# Komodo Resource Sync — entry point
+# ============================================================================
+# Declares the ResourceSync resource itself. Komodo Core polls this repo and
+# reconciles the runtime to match repos.toml + servers.toml + variables.toml +
+# stacks.toml + procedures.toml, showing a diff before applying.
+#
+# A GitLab webhook on example-org/proxmox-infra pointed at Komodo Core's sync
+# listener (secret = vault_komodo_webhook_secret) triggers re-reconcile on push.
+#
+# NOTE: the sync keeps its git config INLINE (not `linked_repo`) on purpose — it
+# must clone the repo to read repos.toml before any Repo resource exists, so it
+# can't bootstrap from one. Same reason resource-sync.toml is excluded from its
+# own resource_path (a sync can't manage its own definition).
+# ============================================================================
+
+[[resource_sync]]
+name = "proxmox-infra"
+[resource_sync.config]
+git_provider = "source.example.com"
+git_account = "komodo"
+repo = "example-org/proxmox-infra"
+branch = "main"
+# repos.toml MUST come before stacks.toml so the linked Repo exists before
+# stacks reference it via `linked_repo`.
+resource_path = [
+  "komodo/repos.toml",
+  "komodo/servers.toml",
+  "komodo/variables.toml",
+  "komodo/stacks.toml",
+  "komodo/procedures.toml",
+]
+# `managed = true` lets Komodo Core write UI edits BACK to these TOMLs (as git
+# commits). It does NOT cause this sync to deploy Stacks on its own — that is
+# driven by the `Deploy On Push` Procedure (BatchDeployStackIfChanged) via a
+# single webhook (see komodo/procedures.toml + komodo/stacks.toml header).
+managed = true

@@ -1,0 +1,28 @@
+---
+# Komodo Periphery — install the agent on docker service hosts.
+#
+# The Periphery agent lets Komodo Core deploy docker-compose stacks on each
+# host. Targets every host in the `docker` group except Komodo Core itself.
+# Scope to one host with --limit (start with the HA spare):
+#   ansible-playbook homelab.proxmox.komodo_periphery --limit adguard-2
+#
+# Prerequisites (per host): bootstrap + configure already run (maintainer + Docker
+# exist), and vault_komodo_core_public_key is set.
+
+- name: Install Komodo Periphery on docker service hosts
+  hosts: docker:!komodo
+  become: true
+  gather_facts: true
+  remote_user: maintainer # root login disabled after bootstrap
+  tags: [komodo, periphery]
+
+  roles:
+    - role: homelab.proxmox.komodo_periphery
+
+  post_tasks:
+    - name: Periphery install summary
+      ansible.builtin.debug:
+        msg:
+          - "✓ Komodo Periphery installed on {{ inventory_hostname }}"
+          - "  → systemctl status periphery"
+          - "  → Add/verify the server in Komodo Core UI (should show healthy)"

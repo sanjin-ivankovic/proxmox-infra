@@ -1,0 +1,74 @@
+# Docker Directory Structure
+
+Base location for container **data** on this host. Compose files are **not**
+stored here — services are deployed by **Komodo** (see below). This directory
+holds only persistent application data plus host-managed scaffolding.
+
+## Layout
+
+```text
+{{ common_docker_dir }}/
+├── README.md          # This file (managed by the common_docker Ansible role)
+└── appdata/           # Persistent per-service data (bind-mount target)
+    ├── {service-1}/   # e.g. adguard-1/, technitium-1/, paperless-ngx/
+    ├── {service-2}/
+    └── ...
+```
+
+Services that use Docker **named volumes** instead of bind mounts (e.g. patchmon,
+omni) may have no `appdata/` entry — their data lives under
+`/var/lib/docker/volumes/`.
+
+> Compose files do not live under `{{ common_docker_dir }}/<service>/`; Komodo
+> deploys them from a git checkout under `/etc/komodo/` — see Deployment.
+
+## Deployment (Komodo)
+
+Services are deployed by the **Komodo Periphery** agent, not from this directory:
+
+- **Source of truth**: `services/<service>/docker-compose.yml` in the
+  `proxmox-infra` git repo (GitLab).
+- **On push to `main`**: a GitLab webhook triggers Komodo Core, which syncs
+  `komodo/*.toml` and has the target host's Periphery run `docker compose up -d`
+  from a git checkout under `/etc/komodo/` (never `{{ common_docker_dir }}`).
+- **Custom images** (e.g. unbound) are built and signed by GitLab CI.
+
+Responsibilities on this host:
+
+- **Komodo** manages compose deployment from `/etc/komodo/`.
+- **Ansible (`common_docker`)** manages: Docker install, this base directory,
+  the backup directory (`{{ common_docker_backup_dir }}`), and this README.
+- **`appdata/<service>/`** is created at deploy time by the service/Komodo.
+
+## Volumes & environment
+
+Compose files reference data via the `${APPDATA_DIR}` variable
+(= `{{ common_docker_dir }}/appdata`):
+
+```yaml
+services:
+  app:
+    image: registry.example/app:1.2.3
+    volumes:
+      - ${APPDATA_DIR}/{service}/data:/app/data
+    environment:
+      - TZ=${TZ}
+```
+
+Non-secret values come from `komodo/variables.toml`; secrets are rendered from
+Ansible Vault into the host's Periphery `[secrets]` — never committed `.env`
+files.
+
+## Local operations
+
+To act on a service on this host (restart, logs, recreate), use the `dc*`
+helpers in `~/.docker_aliases` — they resolve the **Komodo-deployed** stack
+automatically (correct compose file + env). Do **not** recreate the old
+`{{ common_docker_dir }}/<service>/` directory or run `docker compose` from here.
+
+## Notes
+
+- Docker daemon runs as root; containers are managed by user `{{ user }}`
+  (member of the `docker` group).
+- `{{ common_docker_dir }}/` is owned by `{{ user }}:docker`; follows the FHS
+  convention that `/srv` holds site-specific data.

@@ -1,0 +1,48 @@
+---
+# ansible/roles/komodo_core/defaults/main.yml
+#
+# Deploys Komodo Core (UI/API) + FerretDB v2 (Postgres-backed) via
+# docker-compose. Komodo Core is the control plane that drives every host's
+# Periphery agent to deploy docker-compose stacks.
+
+# Image tags (Renovate-pinnable). "2" tracks the v2 major; pin for reproducibility.
+komodo_core_image_tag: "2.2.0"
+komodo_core_ferretdb_image: "ghcr.io/ferretdb/ferretdb:2.7.0"
+# Published by FerretDB/documentdb as ghcr.io/ferretdb/postgres-documentdb.
+# A bare "17" tag exists, but we pin the COMPOUND tag (pg-major-documentdb-
+# ferretdb) so the DocumentDB/FerretDB layer matches the ferretdb image above —
+# bump the two together.
+komodo_core_postgres_image: "ghcr.io/ferretdb/postgres-documentdb:17-0.107.0-ferretdb-2.7.0"
+
+# On-host layout.
+komodo_core_dir: /srv/komodo            # compose + config live here
+komodo_core_data_dir: /srv/komodo/data  # bind-mounted volumes (DB + keys)
+
+# Browser-facing URL (must match the Traefik ingress host in argo-apps).
+komodo_core_host: "https://komodo.example.com"
+komodo_core_port: 9120
+komodo_core_title: "Komodo (homelab)"
+
+# Auth: registration stays closed; the first admin is created deterministically
+# on boot from KOMODO_INIT_ADMIN_* (works even with registration disabled).
+komodo_core_local_auth: true
+komodo_core_disable_user_registration: true
+komodo_core_init_admin_username: "admin"
+komodo_core_init_admin_password: "{{ vault_komodo_admin_password }}"
+
+# Secrets (from Vault). webhook_secret is shared with the GitLab webhook.
+komodo_core_webhook_secret: "{{ vault_komodo_webhook_secret }}"
+komodo_core_jwt_secret: "{{ vault_komodo_jwt_secret }}"
+
+# FerretDB / Postgres credentials (from Vault).
+komodo_core_db_username: "{{ vault_komodo_db_username | default('komodo') }}"
+komodo_core_db_password: "{{ vault_komodo_db_password }}"
+komodo_core_db_name: "komodo"
+
+# GitLab git provider (Komodo clones stack repos through this account). The
+# token is a GitLab homelab-group access token (komodo, read_repository).
+# Re-run the komodo_core play to push a rotated token, then redeploy. Username
+# is ignored by GitLab for access-token auth.
+komodo_core_git_domain: "source.example.com"
+komodo_core_git_username: "komodo"
+komodo_core_git_token: "{{ vault_komodo_gitlab_token }}"
