@@ -1,0 +1,71 @@
+---
+# ============================================================================
+# Master host-lifecycle orchestrator (homelab.proxmox.site)
+# ============================================================================
+# Imports the per-stage host playbooks and groups them with tags so a workflow
+# can be selected at the command line. All hosts are Debian LXCs (and future
+# Linux VMs) configured uniformly; Docker is installed on hosts tagged `docker`.
+#
+# Usage:
+#   ansible-playbook homelab.proxmox.site --tags deployment        # bootstrap+configure+verify
+#   ansible-playbook homelab.proxmox.site --tags bootstrap --limit <host>
+#   ansible-playbook homelab.proxmox.site --tags operations        # update+diagnostics
+#   ansible-playbook homelab.proxmox.site --tags reboot            # (never-gated)
+#   ansible-playbook homelab.proxmox.site --list-tags
+#
+# Tag groups:
+#   deployment  - bootstrap, configure, verify
+#   operations  - update (system-update), diagnostics
+#   lifecycle   - restart-docker, reboot, shutdown
+#   reboot + shutdown are also `never` (require the explicit tag).
+# ============================================================================
+
+- name: Import bootstrap playbook
+  ansible.builtin.import_playbook: hosts/bootstrap.yml
+  tags:
+    - bootstrap
+    - deployment
+
+- name: Import configure playbook
+  ansible.builtin.import_playbook: hosts/configure.yml
+  tags:
+    - configure
+    - deployment
+
+- name: Import verify playbook
+  ansible.builtin.import_playbook: hosts/verify.yml
+  tags:
+    - verify
+    - deployment
+
+- name: Import update playbook
+  ansible.builtin.import_playbook: hosts/update.yml
+  tags:
+    - system-update
+    - operations
+
+- name: Import diagnostics playbook
+  ansible.builtin.import_playbook: hosts/diagnostics.yml
+  tags:
+    - diagnostics
+    - operations
+
+- name: Import restart-docker playbook
+  ansible.builtin.import_playbook: hosts/restart-docker.yml
+  tags:
+    - restart-docker
+    - lifecycle
+
+- name: Import reboot playbook
+  ansible.builtin.import_playbook: hosts/reboot.yml
+  tags:
+    - reboot
+    - lifecycle
+    - never
+
+- name: Import shutdown playbook
+  ansible.builtin.import_playbook: hosts/shutdown.yml
+  tags:
+    - shutdown
+    - lifecycle
+    - never

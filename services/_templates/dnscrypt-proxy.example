@@ -1,0 +1,37 @@
+---
+
+# dnscrypt-proxy variant (Anonymized DNSCrypt) — preserved for future revert.
+#
+# Previous tier-3 setup: AdGuard -> dnscrypt-proxy (Anonymized DNSCrypt via the
+# Cryptostorm anon-cs-* relays) -> no-log resolvers. Replaced by unbound doing
+# DNS-over-TLS to Quad9. The build + tuned config still live in
+# docker/dnscrypt-proxy/ (Dockerfile + dnscrypt-proxy.toml), so reverting only
+# needs the compose blocks below.
+#
+# To revert:
+#   1. In services/adguard-<n>/docker-compose.yml, swap the unbound-<n> service
+#      for the dnscrypt-proxy-<n> block below.
+#   2. Point adguard-<n> depends_on at dnscrypt-proxy-<n>.
+#   3. Set AdGuard upstream_dns default back to 127.0.0.1:5354.
+
+# services:
+
+  # dnscrypt-proxy - Encrypted DNS with Anonymized DNS relay
+  # Routes external queries through anon-cs-* relays (Cryptostorm) to prevent
+  # upstream resolvers from seeing the client IP address.
+  # dnscrypt-proxy-1:
+  #   image: ${REGISTRY_IMAGE}/dnscrypt-proxy:2.1.16
+  #   container_name: dnscrypt-proxy-1
+  #   network_mode: host
+  #   environment:
+  #     TZ: ${TZ}
+  #   restart: unless-stopped
+
+  # dnscrypt-proxy - Encrypted DNS with Anonymized DNS relay
+  # dnscrypt-proxy-2:
+  #   image: ${REGISTRY_IMAGE}/dnscrypt-proxy:2.1.16
+  #   container_name: dnscrypt-proxy-2
+  #   network_mode: host
+  #   environment:
+  #     TZ: ${TZ}
+  #   restart: unless-stopped

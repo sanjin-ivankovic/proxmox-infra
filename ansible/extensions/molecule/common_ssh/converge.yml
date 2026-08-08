@@ -1,0 +1,17 @@
+---
+# Converge: apply common_ssh via FQCN from the homelab.proxmox collection.
+# The role hardens an existing sshd; the slim test image ships no
+# openssh-server, so install it first (real hosts always have sshd).
+- name: Converge
+  hosts: all
+  become: true
+  pre_tasks:
+    - name: Ensure openssh-server is installed
+      ansible.builtin.apt:
+        name: openssh-server
+        state: present
+        update_cache: true
+  tasks:
+    - name: Apply the common_ssh role
+      ansible.builtin.include_role:
+        name: homelab.proxmox.common_ssh

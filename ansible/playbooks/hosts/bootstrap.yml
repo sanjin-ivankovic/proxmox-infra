@@ -1,0 +1,45 @@
+---
+# Bootstrap — run ONCE as root to create the non-root admin user.
+#
+# Connects as root (Terraform-generated key), creates the `maintainer` user with
+# sudo, copies root's authorized_keys, and hardens SSH (root login + password
+# auth off). After this, root login is DISABLED and every other play connects
+# as maintainer.
+#
+# Usage:
+#   ansible-playbook homelab.proxmox.site --tags bootstrap --limit <host>
+#   (or this file directly: ansible-playbook playbooks/hosts/bootstrap.yml --limit <host>)
+
+- name: Bootstrap - Initial User Setup
+  hosts: "{{ target | default('all') }}"
+  become: true
+  gather_facts: true
+  # Connect as root — this play runs before the `maintainer` user exists. The
+  # dynamic inventory sets a per-host `ansible_user=maintainer`, which OUTRANKS
+  # `remote_user`/`--user root`; only a play var (or -e) beats it. So force the
+  # root connection here, otherwise bootstrap tries (and fails as) maintainer.
+  remote_user: root
+  vars:
+    ansible_user: root
+  tags: [bootstrap]
+
+  roles:
+    - role: homelab.proxmox.common_system
+      tags: [system, packages]
+    - role: homelab.proxmox.common_users
+      tags: [users, security]
+    - role: homelab.proxmox.common_ssh
+      tags: [ssh, security]
+
+  post_tasks:
+    - name: Bootstrap completion message
+      ansible.builtin.debug:
+        msg:
+          - "✓ Bootstrap complete!"
+          - "  → User 'maintainer' created with sudo access"
+          - "  → SSH key copied from root"
+          - "  → Root login DISABLED"
+          - ""
+          - "Next steps:"
+          - "  1. Test SSH: ssh -i <key> maintainer@{{ ansible_host }}"
+          - "  2. Run: make configure (for regular updates)"

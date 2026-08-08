@@ -1,0 +1,127 @@
+---
+# Argument specification for the common_system role.
+# Defaults here MUST match defaults/main.yml.
+argument_specs:
+  main:
+    short_description: Base system preparation for Debian/Ubuntu hosts
+    description:
+      - Validates the OS family and version, checks network connectivity,
+        updates APT and installs the base package set, optionally configures the
+        timezone, and grants the ping capability.
+    author:
+      - Maintainer Name
+    options:
+      common_system_backup_dir:
+        type: str
+        required: false
+        default: /root/backup
+        description: Directory created for ad-hoc system backups.
+
+      common_system_network_check_enabled:
+        type: bool
+        required: false
+        default: true
+        description: Whether to verify outbound connectivity before package work.
+      common_system_network_check_host:
+        type: str
+        required: false
+        default: "1.1.1.1"
+        description: Host to probe for the connectivity check.
+      common_system_network_check_count:
+        type: int
+        required: false
+        default: 2
+        description: Number of probes for the connectivity check.
+      common_system_network_check_timeout:
+        type: int
+        required: false
+        default: 3
+        description: Per-probe timeout (seconds) for the connectivity check.
+
+      common_system_debian_version_min:
+        type: int
+        required: false
+        default: 13
+        description: Minimum supported Debian major version.
+      common_system_ubuntu_version_min:
+        type: int
+        required: false
+        default: 24
+        description: Minimum supported Ubuntu major version.
+      common_system_supported_distributions:
+        type: list
+        elements: str
+        required: false
+        default:
+          - Debian
+          - Ubuntu
+        description: Distributions this role is allowed to run on.
+
+      common_system_apt_upgrade_strategy:
+        type: str
+        required: false
+        default: dist
+        choices: ["dist", "full", "safe", "yes", "no"]
+        description: Upgrade strategy passed to the apt module.
+      common_system_apt_cache_valid_time:
+        type: int
+        required: false
+        default: 3600
+        description: Seconds the APT cache is considered valid before refresh.
+      common_system_apt_install_recommends:
+        type: bool
+        required: false
+        default: false
+        description: Whether APT installs recommended packages.
+      common_system_apt_force_apt_get:
+        type: bool
+        required: false
+        default: true
+        description: Force use of apt-get instead of aptitude.
+
+      common_system_required_packages:
+        type: list
+        elements: str
+        required: false
+        default:
+          - sudo
+          - curl
+          - ca-certificates
+          - gnupg
+          - rsync
+          - vim
+          - htop
+          - net-tools
+        description: Base packages installed on every host.
+
+      common_system_install_optional:
+        type: bool
+        required: false
+        default: false
+        description: Whether to also install the optional package set.
+      common_system_optional_packages:
+        type: list
+        elements: str
+        required: false
+        default:
+          - tmux
+          - git
+          - wget
+        description: Optional packages installed when enabled.
+
+      common_system_enable_ping_capability:
+        type: bool
+        required: false
+        default: true
+        description: Grant cap_net_raw to ping for unprivileged ICMP.
+
+      common_system_configure_timezone:
+        type: bool
+        required: false
+        default: false
+        description: Whether to set the system timezone.
+      common_system_timezone:
+        type: str
+        required: false
+        default: UTC
+        description: Timezone to set when configuration is enabled.

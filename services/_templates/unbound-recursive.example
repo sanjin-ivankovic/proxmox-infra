@@ -1,0 +1,45 @@
+---
+
+# unbound-recursive variant (validating recursive resolver) — switch-ready.
+#
+# Same role as the active unbound forwarder (AdGuard -> unbound on
+# 127.0.0.1:5335), but this image RECURSES from the root servers itself instead
+# of forwarding to an upstream resolver over DoT. Tradeoffs: queries to
+# authoritative servers are plaintext (on-path/ISP observable), and the host
+# firewall must allow outbound UDP+TCP/53 to the internet. The build + tuned
+# config live in docker/unbound-recursive/.
+#
+# To switch a host from the forwarder to recursive, in
+# services/adguard-<n>/docker-compose.yml replace the unbound-<n> service with
+# the matching block below:
+#   1. image -> ${REGISTRY_IMAGE}/unbound-recursive:<ver>
+#   2. bind-mount the recursive unbound.conf; DROP the forward-records.conf mount
+#   3. no AdGuard change (upstream stays 127.0.0.1:5335)
+# Then ensure the host firewall permits outbound UDP+TCP/53 and redeploy via
+# Komodo. To revert, swap the unbound-<n> block back (see unbound.example).
+
+# services:
+
+  # Unbound (recursive) - validating resolver, recurses from the root servers
+  # unbound-1:
+  #   image: ${REGISTRY_IMAGE}/unbound-recursive:1.25.1
+  #   container_name: unbound-1
+  #   network_mode: host
+  #   environment:
+  #     TZ: ${TZ}
+  #     # UNBOUND_CACHE_PERCENTAGE: "40"   # optional per-host cache tuning (1-90)
+  #   volumes:
+  #     - ../../docker/unbound-recursive/data/opt/unbound/etc/unbound/unbound.conf:/opt/unbound/etc/unbound/unbound.conf:ro
+  #   restart: unless-stopped
+
+  # Unbound (recursive) - validating resolver, recurses from the root servers
+  # unbound-2:
+  #   image: ${REGISTRY_IMAGE}/unbound-recursive:1.25.1
+  #   container_name: unbound-2
+  #   network_mode: host
+  #   environment:
+  #     TZ: ${TZ}
+  #     # UNBOUND_CACHE_PERCENTAGE: "40"   # optional per-host cache tuning (1-90)
+  #   volumes:
+  #     - ../../docker/unbound-recursive/data/opt/unbound/etc/unbound/unbound.conf:/opt/unbound/etc/unbound/unbound.conf:ro
+  #   restart: unless-stopped

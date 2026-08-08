@@ -1,0 +1,14 @@
+---
+# ansible/roles/common_docker/handlers/main.yml
+
+- name: Reload systemd
+  ansible.builtin.systemd:
+    daemon_reload: true
+  listen: reload systemd
+
+- name: Restart Docker
+  ansible.builtin.systemd:
+    name: docker
+    state: restarted
+    daemon_reload: false
+  listen: restart docker

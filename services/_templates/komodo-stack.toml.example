@@ -1,0 +1,31 @@
+# Example Komodo stack entry for a new service.
+# Copy into komodo/stacks.toml and adjust. Add a matching [[server]] in
+# komodo/servers.toml if the target host is new, and any host-local secrets to
+# ansible/inventory/host_vars/<host>.yml (komodo_periphery_secrets).
+#
+# Env interpolation:
+#   [[TZ]] / [[APPDATA_DIR]] / ...  -> komodo/variables.toml (committed, non-secret)
+#   [[MY_SECRET]]                   -> periphery [secrets] (host-local, from Vault)
+#
+# GIT SOURCE: use `linked_repo = "proxmox-infra"` (the [[repo]] in
+# komodo/repos.toml) instead of inline git_provider/git_account/repo/branch.
+#
+# DEPLOY MODEL: do NOT set `deploy = true` or a per-stack webhook here. Deploys
+# are driven by the single `Deploy On Push` Procedure (komodo/procedures.toml)
+# via BatchDeployStackIfChanged — adding a [[stack]] is enough, it is picked up
+# automatically by the pattern "*". Likewise do NOT set `auto_update`: image tags
+# are pinned in compose and bumped via Renovate PRs, so the git push is the only
+# deploy trigger. See komodo/README.md (§Deploy flow).
+
+[[stack]]
+name = "myapp"
+tags = ["example"]
+[stack.config]
+server = "myapp"            # name of the [[server]] in servers.toml
+linked_repo = "proxmox-infra"   # the [[repo]] in komodo/repos.toml
+file_paths = ["services/myapp/docker-compose.yml"]
+environment = """
+TZ = [[TZ]]
+APPDATA_DIR = [[APPDATA_DIR]]
+MYAPP_PASSWORD = [[MYAPP_PASSWORD]]
+"""

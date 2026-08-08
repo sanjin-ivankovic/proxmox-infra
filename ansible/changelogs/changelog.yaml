@@ -1,0 +1,71 @@
+ancestor: null
+releases:
+  0.1.0:
+    release_date: "2026-06-12"
+    changes:
+      release_summary: >-
+        Initial packaging of the homelab Proxmox automation as the
+        homelab.proxmox collection. Roles (common_system, common_users,
+        common_ssh, common_docker, komodo_core, komodo_periphery, talos_cluster)
+        and the host/komodo/talos playbooks become addressable by FQCN. Adds
+        role argument validation (argument_specs) starting with common_ssh and a
+        Molecule scenario harness under extensions/.
+      minor_changes:
+        - All non-Talos roles (common_system, common_users, common_ssh,
+          common_docker, komodo_core, komodo_periphery) now ship
+          meta/argument_specs.yml, so role inputs are type-validated at the start
+          of execution instead of silently falling back to defaults.
+        - common_system now declares its community.general dependency and
+          komodo_core declares community.docker, matching actual module usage.
+        - The Komodo Core address is defined once as komodo_core_ip in
+          group_vars/all/vars.yml; komodo_periphery sources its allowed_ips from
+          it instead of a hardcoded literal.
+        - The per-domain lxc playbook tree (playbooks/lxc/NN-*.yml + lxc/main.yml)
+          is replaced by a single uniform host lifecycle under playbooks/hosts/
+          (bootstrap, configure, verify, update, diagnostics, restart-docker,
+          reboot, shutdown) plus playbooks/komodo/{core,periphery}.yml, driven by
+          a new master playbooks/site.yml with the same deployment/operations/
+          lifecycle tag groups. The restart-services playbook is renamed
+          restart-docker to reflect that it only restarts the Docker daemon.
+        - The Terraform-state dynamic inventory drops its dead WinRM branch, gains
+          an opt-in state cache (INVENTORY_CACHE=1, ~9x faster repeat runs) that
+          never changes the emitted inventory, and a --doctor mode (make
+          inventory-doctor) that validates terragrunt, per-host IP + SSH key, and
+          host/group name collisions. The emitted hostvars contract is unchanged.
+        - The 13 Talos stage playbooks are now driven by three intent
+          orchestrators (talos/deploy.yml, operate.yml, lifecycle.yml) with the
+          same tag groups + never-gates as the removed talos/main.yml. The
+          talos_cluster role is promoted to a proper role with a main entry point
+          that dispatches read-only checks by talos_cluster_action (the per-action
+          task files remain individually includable) and ships argument_specs.
+        - The static Talos inventory moves from talos/inventory/ to the central
+          inventory/talos/; talos/Makefile is repointed accordingly. The talos/
+          working dirs (configs, patches, manifests, diagnostics) are unchanged.
+        - Molecule scenarios (Docker driver, systemd Debian image) cover
+          common_system, common_users, and common_ssh — converge + idempotence +
+          verify. CI gains a test:collection job (build + install + FQCN
+          syntax-check + argument_specs render, runs in the existing image) and a
+          manual-gated test:molecule job for when molecule lands in the CI image.
+        - The four per-domain Makefiles collapse to one ansible/Makefile + a
+          Makefile.d/ include set (collection, host lifecycle, komodo targets),
+          with collection/molecule/inventory-doctor targets, a validate
+          aggregate, and a talos passthrough. Docs (README, roles/README,
+          docs/ARCHITECTURE, docs/ANSIBLE, docs/TERRAFORM, .claude skill/agent
+          docs) are updated to the collection model + new paths.
+        - Because the playbooks reference roles by FQCN, ansible-lint's syntax
+          check needs the collection installed. The CI lint:ansible job and
+          make lint now build + install the collection (and set
+          ANSIBLE_COLLECTIONS_PATH) before linting; ansible/.yamllint ignores the
+          talosctl-generated talos/configs + talos/patches trees.
+        - The CI image (.ci/docker/Dockerfile) now ships molecule + the Docker
+          driver (Renovate-pinned), so the test:molecule job runs as a gated job
+          (on role/scenario changes) instead of manual.
+        - The archived linux-vms inventory seam is removed (linux_vms group +
+          group_vars dropped from the dynamic inventory), and the talos-vms
+          Terraform project is renamed to talos everywhere — directory,
+          module.talos, var.talos_instances, R2 state key, inventory path, docs.
+      breaking_changes:
+        - Playbook paths moved. Use ``homelab.proxmox.site`` (or
+          playbooks/hosts/*.yml, playbooks/komodo/*.yml) instead of the removed
+          playbooks/lxc/NN-*.yml. The ``restart-services`` tag is now
+          ``restart-docker``.

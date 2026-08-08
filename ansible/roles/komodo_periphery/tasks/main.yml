@@ -1,0 +1,81 @@
+---
+# ansible/roles/komodo_periphery/tasks/main.yml
+#
+# Installs the Komodo Periphery binary + systemd unit and renders the config.
+# We manage the binary/unit/config directly (rather than running upstream
+# setup-periphery.py) so the play is fully idempotent and the config is the
+# single source of truth — the upstream script would write its own config.
+
+- name: Komodo Periphery — install agent
+  tags: [komodo, periphery, install]
+  block:
+    - name: Resolve latest Periphery release tag
+      when: komodo_periphery_version == "latest"
+      block:
+        - name: Query GitHub for the latest komodo release
+          ansible.builtin.uri:
+            url: https://api.github.com/repos/moghtech/komodo/releases/latest
+            return_content: true
+          register: komodo_periphery_latest_release
+          check_mode: false
+
+        - name: Set resolved version fact
+          ansible.builtin.set_fact:
+            komodo_periphery_resolved_version: "{{ komodo_periphery_latest_release.json.tag_name | regex_replace('^v', '') }}"
+
+    - name: Set resolved version fact (pinned)
+      when: komodo_periphery_version != "latest"
+      ansible.builtin.set_fact:
+        komodo_periphery_resolved_version: "{{ komodo_periphery_version }}"
+
+    - name: Map architecture to release asset suffix
+      ansible.builtin.set_fact:
+        komodo_periphery_arch: "{{ 'x86_64' if ansible_facts['architecture'] == 'x86_64' else 'aarch64' }}"
+
+    - name: Create Komodo root directory
+      ansible.builtin.file:
+        path: "{{ komodo_periphery_root_dir }}"
+        state: directory
+        owner: root
+        group: root
+        mode: '0750'
+
+    - name: Install Periphery binary
+      ansible.builtin.get_url:
+        url: >-
+          https://github.com/moghtech/komodo/releases/download/v{{ komodo_periphery_resolved_version }}/periphery-{{ komodo_periphery_arch }}
+        dest: /usr/local/bin/periphery
+        owner: root
+        group: root
+        mode: '0755'
+      notify: restart periphery
+
+- name: Komodo Periphery — configure
+  tags: [komodo, periphery, config]
+  block:
+    - name: Render periphery.config.toml
+      ansible.builtin.template:
+        src: periphery.config.toml.j2
+        dest: "{{ komodo_periphery_root_dir }}/periphery.config.toml"
+        owner: root
+        group: root
+        mode: '0600'
+      notify: restart periphery
+
+    - name: Install Periphery systemd unit
+      ansible.builtin.template:
+        src: periphery.service.j2
+        dest: /etc/systemd/system/{{ komodo_periphery_service_name }}.service
+        owner: root
+        group: root
+        mode: '0644'
+      notify:
+        - reload systemd
+        - restart periphery
+
+    - name: Enable + start Periphery
+      ansible.builtin.systemd:
+        name: "{{ komodo_periphery_service_name }}"
+        enabled: true
+        state: started
+        daemon_reload: true

@@ -1,0 +1,64 @@
+# Git files
+.git
+.gitignore
+.gitattributes
+
+# Documentation
+*.md
+README*
+LICENSE*
+CHANGELOG*
+CONTRIBUTING*
+
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Build artifacts
+*.log
+*.tmp
+*.bak
+*.backup
+
+# CI/CD files
+.github/
+.gitlab-ci.yml
+.travis.yml
+.circleci/
+
+# Docker files (don't include Dockerfile itself in context)
+# Note: Dockerfile is needed, so we don't ignore it
+
+# Temporary files
+tmp/
+temp/
+
+# Test files
+test/
+tests/
+*.test
+*_test.go
+
+# Example files
+examples/
+example/
+
+# Docker Compose files (not needed in image)
+docker-compose*.yml
+docker-compose*.yaml
+
+# OS-specific files
+Thumbs.db
+
+# Cache directories
+.cache/
+__pycache__/
+
+# Coverage reports
+coverage/
+*.coverage
+htmlcov/

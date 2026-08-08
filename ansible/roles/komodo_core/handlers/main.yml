@@ -1,0 +1,8 @@
+---
+# ansible/roles/komodo_core/handlers/main.yml
+
+- name: Restart Komodo Core
+  community.docker.docker_compose_v2:
+    project_src: "{{ komodo_core_dir }}"
+    state: restarted
+  listen: restart komodo core

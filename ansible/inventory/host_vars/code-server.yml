@@ -1,0 +1,26 @@
+---
+# ansible/inventory/host_vars/code-server.yml
+
+# --- Komodo periphery secrets ---------------------------------------------
+# Host-local Komodo periphery secrets for code-server. Real values live ONLY
+# here (rendered into the host's periphery.config.toml), referenced from the
+# stack in komodo/stacks.toml as [[NAME]].
+# Add the matching vault_code_server_* keys via `make -C ansible vault-edit`.
+#
+# CODE_SERVER_HASHED_PASSWORD is an argon2id hash — code-server reads
+# HASHED_PASSWORD and never sees the plaintext, which stays in the password
+# manager.
+#
+# STORE IT $$-ESCAPED. Docker Compose interpolates `$` inside env values,
+# including the env file Komodo writes, so a raw hash arrives at the container
+# shredded ($argon2id$v=19$m=4096,... -> =19=4096,...) and every login fails
+# with no error anywhere. `$$` collapses back to `$` — verified on the host.
+# The container's entrypoint now rejects a non-argon2 value at startup rather
+# than booting healthy with a broken password.
+#
+# Generate the value to paste (the -id matters; plain -e emits argon2i):
+#   echo -n '<password>' | npx argon2-cli -id -e | sed 's/\$/$$/g'
+#
+# The result contains `$`, so keep it single-quoted in vault.yml.
+komodo_periphery_secrets:
+  CODE_SERVER_HASHED_PASSWORD: "{{ vault_code_server_hashed_password }}"

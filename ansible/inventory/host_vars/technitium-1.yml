@@ -1,0 +1,8 @@
+---
+# ansible/inventory/host_vars/technitium-1.yml
+# Host-local Komodo periphery secret for technitium-1 (DNS admin password).
+# Add vault_technitium_admin_password via `make -C ansible vault-edit`.
+# Shared across the technitium HA pair (same password on -1 and -2).
+
+komodo_periphery_secrets:
+  DNS_SERVER_ADMIN_PASSWORD: "{{ vault_technitium_admin_password }}"

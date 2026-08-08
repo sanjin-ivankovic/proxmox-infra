@@ -1,0 +1,55 @@
+---
+# ============================================================================
+# Talos Cluster Role - Check Configuration Files
+# ============================================================================
+# Validates that talosconfig and optionally kubeconfig exist.
+#
+# Variables:
+#   - talos_config_file: Path to talosconfig (required)
+#   - talos_kubeconfig_file: Path to kubeconfig (optional)
+#   - talos_cluster_check_kubeconfig: Whether to check kubeconfig (default: false)
+#
+# Usage:
+#   - ansible.builtin.include_role:
+#       name: talos_cluster
+#       tasks_from: check_configs
+#     vars:
+#       talos_cluster_check_kubeconfig: true
+# ============================================================================
+
+- name: Verify talosconfig exists
+  ansible.builtin.stat:
+    path: "{{ talos_config_file }}"
+  register: talos_cluster_talosconfig_stat
+  delegate_to: localhost
+  run_once: true
+
+- name: Fail if talosconfig not found
+  ansible.builtin.fail:
+    msg: |
+      talosconfig not found at: {{ talos_config_file }}
+      Generate configs first:
+        cd talos && make generate-configs
+  when: not talos_cluster_talosconfig_stat.stat.exists
+  delegate_to: localhost
+  run_once: true
+
+- name: Verify kubeconfig exists
+  ansible.builtin.stat:
+    path: "{{ talos_kubeconfig_file }}"
+  register: talos_cluster_kubeconfig_stat
+  delegate_to: localhost
+  run_once: true
+  when: talos_cluster_check_kubeconfig | default(false)
+
+- name: Fail if kubeconfig not found
+  ansible.builtin.fail:
+    msg: |
+      kubeconfig not found at: {{ talos_kubeconfig_file }}
+      Bootstrap cluster first:
+        cd talos && make bootstrap
+  when:
+    - talos_cluster_check_kubeconfig | default(false)
+    - not talos_cluster_kubeconfig_stat.stat.exists
+  delegate_to: localhost
+  run_once: true
