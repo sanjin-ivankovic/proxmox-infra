@@ -1,0 +1,99 @@
+---
+# ============================================================================
+# Talos Machine Config Patch - Control Plane
+# ============================================================================
+# This patch is applied only to control plane nodes.
+#
+# Usage: Applied automatically during config generation via
+#        talosctl gen config --config-patch-control-plane @patches/controlplane.yaml
+#
+# Omni enrolment (SideroLinkConfig, EventSinkConfig, KmsgLogConfig) is NOT in
+# this file — it lives only on the running node. `apply-config --file` drops
+# those documents; use `talosctl patch machineconfig` on a live node. See the
+# guard in playbooks/talos/02-apply-configs.yml.
+# ============================================================================
+
+machine:
+  network:
+    interfaces:
+      - interface: ens18
+        vip:
+          ip: "10.10.0.40"
+
+  files:
+    # Structured authentication config for the apiserver (stable since k8s
+    # 1.34). The apiserver HOT-RELOADS this file, so adding or removing an
+    # issuer is a config change rather than a restart.
+    #
+    # The issuer URL MUST be the exact `iss` claim string — the apiserver
+    # compares it verbatim. Authentik issuers are per application:
+    # https://auth.example.com/application/o/<slug>/ (trailing slash included).
+    # From the CP nodes it resolves to the Traefik LB (10.10.0.67) and the
+    # apiserver fetches JWKS over that path. Public Let's Encrypt cert on the
+    # issuer → no certificateAuthority needed.
+    #
+    # OIDC login therefore depends on Traefik/ingress being up. The
+    # cert-based kubeconfig
+    # (ansible/talos/configs/kubeconfig, system:masters) is the break-glass
+    # path and does not depend on any of this.
+    #
+    # The `oidc:` prefixes namespace OIDC identities and groups so they cannot
+    # collide with cert identities, and make RBAC subjects explicit
+    # (e.g. group `oidc:admins`).
+    # 0644, not 0600: the apiserver static pod runs as uid 65534 (nobody) and
+    # cannot read a root-only file — it exits with "permission denied" and
+    # CrashLoopBackOffs. The file holds no secrets; issuer URLs and claim names
+    # are all public in each IdP's discovery document.
+    - path: /var/lib/kubernetes/authentication-config.yaml
+      permissions: 0o644
+      op: create
+      content: |
+        apiVersion: apiserver.config.k8s.io/v1
+        kind: AuthenticationConfiguration
+        jwt:
+          # Authentik (client declared in argo-apps
+          # apps/infra/authentik/blueprints/20-oauth2-providers.yaml).
+          - issuer:
+              url: https://auth.example.com/application/o/headlamp/
+              audiences:
+                - headlamp
+            claimMappings:
+              username:
+                claim: preferred_username
+                prefix: 'oidc:'
+              groups:
+                claim: groups
+                prefix: 'oidc:'
+
+cluster:
+  # Control Plane-specific etcd configuration
+  etcd:
+    # Advertise metrics for monitoring
+    extraArgs:
+      listen-metrics-urls: http://0.0.0.0:2381
+
+  # API Server configuration
+  apiServer:
+    extraArgs:
+      # Audit logging
+      audit-log-path: /var/log/audit/kube/audit.log
+      audit-log-maxage: "30"
+      audit-log-maxbackup: "10"
+      audit-log-maxsize: "100"
+
+      # Per-user OIDC login, defined in machine.files above. NOTE: no --oidc-*
+      # flags may be set alongside this — the apiserver treats the combination
+      # as a misconfiguration and exits immediately on startup.
+      authentication-config: /var/lib/kubernetes/authentication-config.yaml
+
+    # The apiserver runs as a static pod and cannot see host files without an
+    # explicit mount, so the authentication config is bind-mounted in.
+    extraVolumes:
+      - hostPath: /var/lib/kubernetes/authentication-config.yaml
+        mountPath: /var/lib/kubernetes/authentication-config.yaml
+        readonly: true
+
+    # Additional SANs for the API server certificate
+    certSANs:
+      - 10.10.0.40
+      - talos-vip.example.com

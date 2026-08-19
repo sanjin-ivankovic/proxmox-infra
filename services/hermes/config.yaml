@@ -1,0 +1,48 @@
+---
+# Hermes Agent config.yaml — committed, NON-SECRET. Bind-mounted read-only to
+# /opt/data/config.yaml by services/hermes/docker-compose.yml.
+#
+# The LiteLLM api_key is NOT stored here. It is supplied via the OPENAI_API_KEY
+# env (a periphery secret from Vault) and pulled in with Hermes's ${VAR} config
+# interpolation. NOTE: the custom provider does NOT implicitly inherit
+# OPENAI_API_KEY — the api_key field must be set explicitly (it otherwise
+# defaults to a "no-key-configured" placeholder and LiteLLM rejects it 401), so
+# we reference ${OPENAI_API_KEY} here. base_url has NO /v1; Hermes appends the
+# OpenAI path itself.
+model:
+  # Bind the main model to the named "Litellm" custom provider so /model can
+  # switch between the models listed below with /model custom:Litellm:<id>.
+  provider: custom:Litellm
+  default: gpt-5.4
+  base_url: https://litellm.example.com
+  api_key: ${OPENAI_API_KEY}
+
+custom_providers:
+  - name: Litellm
+    base_url: https://litellm.example.com
+    model: gpt-5.4
+    api_key: ${OPENAI_API_KEY}
+    # All models exposed on the LiteLLM gateway. Use the PUBLIC model name (the
+    # left column in LiteLLM), not the azure_ai/openai backend route. Switch on
+    # the fly from Telegram / dashboard / CLI with:
+    #   /model custom:Litellm:claude-opus-4-8
+    # context_length is pinned where known; the rest auto-detect via /v1/models.
+    models:
+      gpt-5.4:
+        context_length: 1050000
+      gpt-5.4-pro: {}
+      gpt-5.4-mini: {}
+      gpt-5.3-codex: {}
+      claude-opus-4-8: {}
+      claude-opus-4-7: {}
+      claude-opus-4-6: {}
+      claude-sonnet-4-6: {}
+      deepseek-v4-pro: {}
+
+agent:
+  max_turns: 50
+  reasoning_effort: medium
+
+gateway:
+  platforms:
+    - telegram

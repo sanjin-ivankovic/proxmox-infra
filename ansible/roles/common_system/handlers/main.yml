@@ -1,0 +1,8 @@
+---
+# ansible/roles/common_system/handlers/main.yml
+
+- name: Set ping capability
+  community.general.capabilities:
+    path: /bin/ping
+    capability: cap_net_raw+p
+    state: present

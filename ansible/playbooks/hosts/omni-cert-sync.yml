@@ -1,0 +1,65 @@
+---
+# ============================================================================
+# Deploy the Omni TLS cert-sync cron
+# ============================================================================
+# Omni terminates TLS itself from /srv/omni-secrets/server-chain.pem and
+# server-key.pem — file copies of the cluster's cert-manager wildcard
+# (traefik/example-com-wildcard-tls). This playbook installs a daily cron on
+# the omni host that pulls the secret through the apiserver with a
+# read-only ServiceAccount token (argo-apps
+# apps/infra/traefik/omni-cert-sync/) and restarts the omni container when
+# the certificate rotates.
+#
+# Prerequisites:
+#   - vault_omni_cert_sync_token in the shared vault (the token from the
+#     traefik/omni-cert-sync-token Secret)
+#   - the omni-cert-sync RBAC synced in argo-apps
+#
+# Usage:
+#   cd ansible
+#   ansible-playbook -i inventory/terraform_state_inventory.py \
+#     playbooks/hosts/omni-cert-sync.yml
+# ============================================================================
+
+- name: Deploy Omni cert-sync cron
+  hosts: omni
+  become: true
+  gather_facts: false
+
+  vars:
+    cert_sync_script: /usr/local/bin/omni-cert-sync.sh
+    cert_sync_token_file: /srv/omni-secrets/cert-sync-token
+
+  tasks:
+    - name: Install ServiceAccount token
+      ansible.builtin.copy:
+        content: "{{ vault_omni_cert_sync_token }}"
+        dest: "{{ cert_sync_token_file }}"
+        owner: root
+        group: root
+        mode: "0600"
+      no_log: true
+
+    - name: Install cert-sync script
+      ansible.builtin.copy:
+        src: files/omni-cert-sync.sh
+        dest: "{{ cert_sync_script }}"
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: Install daily cron
+      ansible.builtin.cron:
+        name: omni-cert-sync
+        special_time: daily
+        user: root
+        job: "{{ cert_sync_script }} >> /var/log/omni-cert-sync.log 2>&1"
+
+    - name: Run the sync once now
+      ansible.builtin.command: "{{ cert_sync_script }}"
+      register: cert_sync_run
+      changed_when: "'updated' in cert_sync_run.stdout"
+
+    - name: Show sync result
+      ansible.builtin.debug:
+        msg: "{{ cert_sync_run.stdout_lines }}"

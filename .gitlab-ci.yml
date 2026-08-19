@@ -1,0 +1,490 @@
+---
+# =============================================================================
+# GitLab CI/CD pipeline for proxmox-infra (Terraform + Ansible + custom images).
+#
+# Runs on the homelab gitlab-runner (Docker executor binding the host docker
+# socket — tags: [docker]).
+#
+# CI is LINT + IMAGE BUILD/SIGN ONLY. Deploy is Komodo's job: a GitLab push
+# triggers Komodo Core's own webhook → ResourceSync reconcile, independent of
+# this pipeline (it neither gates nor blocks Komodo).
+#
+# Quality is NATIVE per-tool jobs (fail-fast, individually gated), NOT a
+# pre-commit blob. pre-commit stays a LOCAL dev hook only — never run in CI.
+#
+# Shared jobs come from homelab/ci-components CI/CD COMPONENTS (version-pinned below,
+# Renovate-tracked). Since 2.0.0 every component's `image` input defaults to
+# this repo's $CI_IMAGE (proxmox-infra/ci, a thin FROM ci-base layer carrying
+# terraform + trivy + ansible), so includes only state non-default inputs. The
+# terraform/ansible lint and the custom image build jobs are proxmox-only and
+# stay inline.
+#
+# Harbor auth: GitLab Harbor integration (group homelab) injects $HARBOR_*.
+# Secrets via group CI/CD variables: COSIGN_KEY/COSIGN_PASSWORD, RENOVATE_*,
+# GITHUB_PUBLISH_TOKEN.
+# =============================================================================
+
+default:
+  tags:
+    - docker
+  # New pushes auto-cancel superseded pipelines (see workflow:auto_cancel);
+  # side-effecting jobs opt OUT below with interruptible: false.
+  interruptible: true
+
+variables:
+  CI_IMAGE: registry.example.com/example-org/proxmox-infra/ci:latest
+  IMAGE_REPO: registry.example.com/example-org/proxmox-infra
+  GIT_DEPTH: "50"
+
+stages:
+  - scan
+  - lint
+  - test
+  - image
+  - mirror
+
+workflow:
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "schedule"'
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+    - if: '$CI_COMMIT_BRANCH == "main" && $CI_PIPELINE_SOURCE == "push"'
+    - when: never
+  auto_cancel:
+    on_new_commit: interruptible
+
+# -----------------------------------------------------------------------------
+# Shared CI/CD components (homelab/ci-components, pinned below). Each reads this
+# repo's own .config/ rule files (falling back to the defaults baked into
+# ci-base at /opt/ci/config/) and runs on $CI_IMAGE by default.
+# -----------------------------------------------------------------------------
+include:
+  # Secret scan + per-tool lint (yaml/shell/markdown).
+  - component: source.example.com/homelab/ci-components/scan-secrets@3.0.14
+  - component: source.example.com/homelab/ci-components/lint-yaml@3.0.14
+  - component: source.example.com/homelab/ci-components/lint-shell@3.0.14
+  - component: source.example.com/homelab/ci-components/lint-markdown@3.0.14
+  # Conventional-commit gate on MRs (commit grammar feeds release automation).
+  - component: source.example.com/homelab/ci-components/lint-commits@3.0.14
+
+  # (no test-ci-scripts: this repo has no .ci/scripts Python; the publish/
+  # sanitize tooling is provided by ci-base at /opt/ci.)
+
+  # Terraform misconfig/IaC scan (trivy config understands HCL natively).
+  # TODO: flip exit_code to "1" after CVE triage
+  - component: source.example.com/homelab/ci-components/trivy-config@3.0.14
+    inputs:
+      job_name: "scan:trivy-iac"
+      target: terraform
+      exit_code: "0"
+      rules:
+        - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+          changes: [terraform/**/*, .config/.trivyignore]
+        - if: '$CI_COMMIT_BRANCH == "main" && $CI_PIPELINE_SOURCE == "push"'
+          changes: [terraform/**/*, .config/.trivyignore]
+
+  # Build + sign + SBOM-attest this repo's CI image (rebuild on the Dockerfile
+  # or on a SCHEDULE_TYPE=rebuild schedule; the /opt/ci publish tooling is
+  # provided by ci-base).
+  - component: source.example.com/homelab/ci-components/ci-image@3.0.14
+    inputs:
+      image_name: example-org/proxmox-infra/ci
+      changes: [.ci/docker/Dockerfile]
+  - component: source.example.com/homelab/ci-components/cosign-sign@3.0.14
+    inputs:
+      job_name: "sign:ci-image"
+      needs_job: "build:ci-image"
+      rules:
+        - if: '$CI_PIPELINE_SOURCE == "schedule" && $SCHEDULE_TYPE == "rebuild"'
+        - if: '$CI_COMMIT_BRANCH == "main" && $CI_PIPELINE_SOURCE == "push"'
+          changes: [.ci/docker/Dockerfile]
+  - component: source.example.com/homelab/ci-components/sbom-attest@3.0.14
+    inputs:
+      job_name: "sbom:ci-image"
+      needs_job: "build:ci-image"
+      # syft lives in ci-base, not in this repo's thin image (and the thin
+      # image lags ci-base by a Renovate digest bump). SBOM generation needs
+      # no repo-specific tools, so run it on ci-base directly.
+      image: registry.example.com/homelab/ci-components/ci:latest
+      rules:
+        - if: '$CI_PIPELINE_SOURCE == "schedule" && $SCHEDULE_TYPE == "rebuild"'
+        - if: '$CI_COMMIT_BRANCH == "main" && $CI_PIPELINE_SOURCE == "push"'
+          changes: [.ci/docker/Dockerfile]
+
+  # --- per app-image: trivy vuln scan + cosign sign + SBOM attest, chained off
+  # the image's build job ("build:<img>") via its own ref artifact. -----------
+  # TODO: flip exit_code to "1" after CVE triage
+  - component: source.example.com/homelab/ci-components/trivy-image@3.0.14
+    inputs:
+      job_name: "scan:trivy-pihole"
+      needs_job: "build:pihole"
+      ref_file: image-ref-pihole.txt
+      rules:
+        - if: '$CI_COMMIT_BRANCH == "main" && $CI_PIPELINE_SOURCE == "push"'
+          changes: [docker/pihole/**/*]
+  - component: source.example.com/homelab/ci-components/cosign-sign@3.0.14
+    inputs:
+      job_name: "sign:pihole"
+      needs_job: "build:pihole"
+      ref_file: image-ref-pihole.txt
+      rules:
+        - if: '$CI_COMMIT_BRANCH == "main" && $CI_PIPELINE_SOURCE == "push"'
+          changes: [docker/pihole/**/*]
+  - component: source.example.com/homelab/ci-components/sbom-attest@3.0.14
+    inputs:
+      job_name: "sbom:pihole"
+      # syft lives in ci-base, not the thin image (see sbom:ci-image note).
+      image: registry.example.com/homelab/ci-components/ci:latest
+      needs_job: "build:pihole"
+      ref_file: image-ref-pihole.txt
+      rules:
+        - if: '$CI_COMMIT_BRANCH == "main" && $CI_PIPELINE_SOURCE == "push"'
+          changes: [docker/pihole/**/*]
+
+  # TODO: flip exit_code to "1" after CVE triage
+  - component: source.example.com/homelab/ci-components/trivy-image@3.0.14
+    inputs:
+      job_name: "scan:trivy-unbound"
+      needs_job: "build:unbound"
+      ref_file: image-ref-unbound.txt
+      rules:
+        - if: '$CI_COMMIT_BRANCH == "main" && $CI_PIPELINE_SOURCE == "push"'
+          changes: [docker/unbound/**/*]
+  - component: source.example.com/homelab/ci-components/cosign-sign@3.0.14
+    inputs:
+      job_name: "sign:unbound"
+      needs_job: "build:unbound"
+      ref_file: image-ref-unbound.txt
+      rules:
+        - if: '$CI_COMMIT_BRANCH == "main" && $CI_PIPELINE_SOURCE == "push"'
+          changes: [docker/unbound/**/*]
+  - component: source.example.com/homelab/ci-components/sbom-attest@3.0.14
+    inputs:
+      job_name: "sbom:unbound"
+      # syft lives in ci-base, not the thin image (see sbom:ci-image note).
+      image: registry.example.com/homelab/ci-components/ci:latest
+      needs_job: "build:unbound"
+      ref_file: image-ref-unbound.txt
+      rules:
+        - if: '$CI_COMMIT_BRANCH == "main" && $CI_PIPELINE_SOURCE == "push"'
+          changes: [docker/unbound/**/*]
+
+  # TODO: flip exit_code to "1" after CVE triage
+  - component: source.example.com/homelab/ci-components/trivy-image@3.0.14
+    inputs:
+      job_name: "scan:trivy-unbound-recursive"
+      needs_job: "build:unbound-recursive"
+      ref_file: image-ref-unbound-recursive.txt
+      rules:
+        - if: '$CI_COMMIT_BRANCH == "main" && $CI_PIPELINE_SOURCE == "push"'
+          changes: [docker/unbound-recursive/**/*]
+  - component: source.example.com/homelab/ci-components/cosign-sign@3.0.14
+    inputs:
+      job_name: "sign:unbound-recursive"
+      needs_job: "build:unbound-recursive"
+      ref_file: image-ref-unbound-recursive.txt
+      rules:
+        - if: '$CI_COMMIT_BRANCH == "main" && $CI_PIPELINE_SOURCE == "push"'
+          changes: [docker/unbound-recursive/**/*]
+  - component: source.example.com/homelab/ci-components/sbom-attest@3.0.14
+    inputs:
+      job_name: "sbom:unbound-recursive"
+      # syft lives in ci-base, not the thin image (see sbom:ci-image note).
+      image: registry.example.com/homelab/ci-components/ci:latest
+      needs_job: "build:unbound-recursive"
+      ref_file: image-ref-unbound-recursive.txt
+      rules:
+        - if: '$CI_COMMIT_BRANCH == "main" && $CI_PIPELINE_SOURCE == "push"'
+          changes: [docker/unbound-recursive/**/*]
+
+  # TODO: flip exit_code to "1" after CVE triage
+  - component: source.example.com/homelab/ci-components/trivy-image@3.0.14
+    inputs:
+      job_name: "scan:trivy-dnscrypt-proxy"
+      needs_job: "build:dnscrypt-proxy"
+      ref_file: image-ref-dnscrypt-proxy.txt
+      rules:
+        - if: '$CI_COMMIT_BRANCH == "main" && $CI_PIPELINE_SOURCE == "push"'
+          changes: [docker/dnscrypt-proxy/**/*]
+  - component: source.example.com/homelab/ci-components/cosign-sign@3.0.14
+    inputs:
+      job_name: "sign:dnscrypt-proxy"
+      needs_job: "build:dnscrypt-proxy"
+      ref_file: image-ref-dnscrypt-proxy.txt
+      rules:
+        - if: '$CI_COMMIT_BRANCH == "main" && $CI_PIPELINE_SOURCE == "push"'
+          changes: [docker/dnscrypt-proxy/**/*]
+  - component: source.example.com/homelab/ci-components/sbom-attest@3.0.14
+    inputs:
+      job_name: "sbom:dnscrypt-proxy"
+      # syft lives in ci-base, not the thin image (see sbom:ci-image note).
+      image: registry.example.com/homelab/ci-components/ci:latest
+      needs_job: "build:dnscrypt-proxy"
+      ref_file: image-ref-dnscrypt-proxy.txt
+      rules:
+        - if: '$CI_COMMIT_BRANCH == "main" && $CI_PIPELINE_SOURCE == "push"'
+          changes: [docker/dnscrypt-proxy/**/*]
+
+  # GitHub portfolio mirror (sanitize → verify → force-push; /opt/ci tooling).
+  - component: source.example.com/homelab/ci-components/mirror-github@3.0.14
+    inputs:
+      # The /opt/ci publish tooling AND the sanitize-base this repo extends
+      # live in ci-base; the thin image lags ci-base by a digest bump, so
+      # run the mirror on ci-base directly (the pre-2.0 behavior).
+      image: registry.example.com/homelab/ci-components/ci:latest
+      repo_name: proxmox-infra
+
+# -----------------------------------------------------------------------------
+# Side-effecting jobs must never be canceled mid-push/sign/mirror by
+# workflow:auto_cancel — opt them out of the interruptible default.
+# (.build-image and validate:terraform set theirs inline below.)
+# -----------------------------------------------------------------------------
+build:ci-image:
+  interruptible: false
+
+sign:ci-image:
+  interruptible: false
+
+sbom:ci-image:
+  interruptible: false
+
+sign:pihole:
+  interruptible: false
+
+sbom:pihole:
+  interruptible: false
+
+sign:unbound:
+  interruptible: false
+
+sbom:unbound:
+  interruptible: false
+
+sign:unbound-recursive:
+  interruptible: false
+
+sbom:unbound-recursive:
+  interruptible: false
+
+sign:dnscrypt-proxy:
+  interruptible: false
+
+sbom:dnscrypt-proxy:
+  interruptible: false
+
+mirror:github:
+  interruptible: false
+
+# -----------------------------------------------------------------------------
+# Terraform + Ansible lint — proxmox-only tooling, stays inline (not every repo
+# needs terraform/ansible). Runs on $CI_IMAGE (which carries both).
+# -----------------------------------------------------------------------------
+lint:terraform:
+  stage: lint
+  image: $CI_IMAGE
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+      changes: &tf-changes
+        - terraform/**/*
+    - if: '$CI_COMMIT_BRANCH == "main" && $CI_PIPELINE_SOURCE == "push"'
+      changes: *tf-changes
+  script:
+    - terraform fmt -check -recursive terraform/
+
+# Backend-less validate of both Terragrunt units. The terragrunt-generated
+# files (backend.tf / versions.tf / provider.tf) are absent on a fresh
+# checkout, but init -backend=false still resolves providers because each
+# module's committed versions.tf declares its required_providers — verified to
+# init + validate cleanly from a bare `git archive` tree.
+validate:terraform:
+  stage: lint
+  image: $CI_IMAGE
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+      changes: *tf-changes
+    - if: '$CI_COMMIT_BRANCH == "main" && $CI_PIPELINE_SOURCE == "push"'
+      changes: *tf-changes
+  script:
+    - |
+      set -e
+      for dir in terraform/lxc terraform/talos; do
+        echo "=== validate $dir ==="
+        terraform -chdir="$dir" init -backend=false -input=false
+        terraform -chdir="$dir" validate
+      done
+
+lint:ansible:
+  stage: lint
+  image: $CI_IMAGE
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+      changes: &ansible-changes
+        - ansible/**/*
+    - if: '$CI_COMMIT_BRANCH == "main" && $CI_PIPELINE_SOURCE == "push"'
+      changes: *ansible-changes
+  script:
+    # The playbooks reference roles by FQCN (homelab.proxmox.*), so the
+    # collection must be installed for ansible-lint's syntax check to resolve
+    # them. Install into the default collections path (on the search path next
+    # to the community.* deps), then lint from the repo root.
+    - (cd ansible && ansible-galaxy collection build --force --output-path /tmp/coll
+       && ansible-galaxy collection install /tmp/coll/homelab-proxmox-*.tar.gz --force)
+    - env ANSIBLE_ROLES_PATH=ansible/roles ansible-lint -c ansible/.ansible-lint
+
+# Build the homelab.proxmox collection, install it locally, and prove the
+# FQCN-referencing playbooks parse + the role argument_specs render. Everything
+# here runs in $CI_IMAGE (ansible-core + collections, no molecule needed).
+test:collection:
+  stage: test
+  image: $CI_IMAGE
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+      changes: *ansible-changes
+    - if: '$CI_COMMIT_BRANCH == "main" && $CI_PIPELINE_SOURCE == "push"'
+      changes: *ansible-changes
+  script:
+    # A minimal CI ansible.cfg, loaded explicitly so ansible doesn't warn about
+    # the in-tree config under GitLab's world-writable build dir (and so it
+    # skips the dev cfg's relative paths + vault file that don't apply here).
+    - export ANSIBLE_CONFIG="$CI_PROJECT_DIR/.ci/ansible-ci.cfg"
+    - cd ansible
+    - ansible-galaxy collection build --force --output-path /tmp/coll
+    # Install into the default collections path so the collection sits ON the
+    # search path next to its community.* deps. The explicit env (absolute) keeps
+    # resolution correct even when a tool runs from another cwd.
+    - ansible-galaxy collection install /tmp/coll/homelab-proxmox-*.tar.gz --force
+    - export ANSIBLE_COLLECTIONS_PATH="$HOME/.ansible/collections:/usr/share/ansible/collections"
+    # FQCN playbooks parse (host lifecycle + komodo + talos orchestrators).
+    - ansible-playbook playbooks/site.yml --syntax-check
+    - ansible-playbook playbooks/komodo/core.yml playbooks/komodo/periphery.yml --syntax-check
+    - ansible-playbook -i inventory/talos/hosts.yml playbooks/talos/deploy.yml --syntax-check
+    - ansible-playbook -i inventory/talos/hosts.yml playbooks/talos/operate.yml --syntax-check
+    - ansible-playbook -i inventory/talos/hosts.yml playbooks/talos/lifecycle.yml --syntax-check
+    # Inventory script self-check (terragrunt won't auth in CI; --doctor still
+    # validates the script loads + reports — allow it to be informational).
+    - python3 inventory/terraform_state_inventory.py --doctor || true
+    # Every role's argument_specs render (proves they parse + are well-formed).
+    - for r in common_system common_users common_ssh common_docker komodo_core komodo_periphery talos_cluster; do
+        ansible-doc -t role "homelab.proxmox.$r" >/dev/null || exit 1;
+      done
+
+# Molecule role tests (converge + idempotence + verify) for the common_* roles.
+# Runs in $CI_IMAGE (ships molecule + the Docker driver) and drives containers
+# over the runner's host Docker socket. Gated to role/scenario changes only —
+# it's slower than the other jobs and unaffected by playbook/inventory edits.
+# See ansible/extensions/molecule/README.md.
+test:molecule:
+  stage: test
+  image: $CI_IMAGE
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+      changes:
+        - ansible/roles/**/*
+        - ansible/extensions/molecule/**/*
+        - ansible/galaxy.yml
+    - if: '$CI_COMMIT_BRANCH == "main" && $CI_PIPELINE_SOURCE == "push"'
+      changes:
+        - ansible/roles/**/*
+        - ansible/extensions/molecule/**/*
+        - ansible/galaxy.yml
+  script:
+    # Minimal CI ansible.cfg loaded explicitly (no world-writable warning, no
+    # dev cfg relative-path/vault baggage); molecule inherits it.
+    - export ANSIBLE_CONFIG="$CI_PROJECT_DIR/.ci/ansible-ci.cfg"
+    - cd ansible
+    - ansible-galaxy collection build --force --output-path /tmp/coll
+    # Install into the default collections path; the absolute env keeps the
+    # collection resolvable from molecule's ephemeral run directory.
+    - ansible-galaxy collection install /tmp/coll/homelab-proxmox-*.tar.gz --force
+    - export ANSIBLE_COLLECTIONS_PATH="$HOME/.ansible/collections:/usr/share/ansible/collections"
+    - for s in common_system common_users common_ssh; do molecule test -s "$s"; done
+
+# -----------------------------------------------------------------------------
+# Custom app-image builds. One job per image ("build:<img>", targeted by the
+# trivy/sign/sbom component includes above via needs_job), each gated on its
+# own docker/<img>/ subtree so a change to one image builds, scans, signs and
+# attests exactly that image — a matrix job can't do this because rules:changes
+# is evaluated once for all instances, and rebuilding unchanged images would
+# push digests the per-image sign jobs never re-sign. docker:cli builds (host
+# daemon). The semver extract awk is the one bit GitLab can't do natively
+# (per-Dockerfile parsing). Main-push only.
+# -----------------------------------------------------------------------------
+.build-image:
+  stage: image
+  image: docker:29-cli@sha256:000bb62ff495f986c9f5578eb67cc2cb98b91138eda81d7762d5371eb8a497fe
+  needs: []
+  interruptible: false
+  variables:
+    DOCKER_CONFIG: $CI_PROJECT_DIR/.docker
+  before_script:
+    - mkdir -p "$DOCKER_CONFIG"
+    - echo "$HARBOR_PASSWORD" | docker login "$HARBOR_HOST" -u "$HARBOR_USERNAME" --password-stdin
+  script:
+    - |
+      set -e
+      extract_arg() {
+        awk -v arg="$2" '
+          $1 == "ARG" && index($2, arg"=") == 1 {
+            v = substr($2, length(arg) + 2)
+            gsub(/^["'"'"']|["'"'"']$/, "", v)
+            print v; exit
+          }' "$1"
+      }
+      case "$IMAGE" in
+        pihole)
+          VERSION=$(awk -F'[: @]' '/^FROM[[:space:]]+pihole\/pihole:/{print $3; exit}' "docker/${IMAGE}/Dockerfile") ;;
+        unbound|unbound-recursive)
+          VERSION=$(extract_arg "docker/${IMAGE}/Dockerfile" UNBOUND_VERSION) ;;
+        dnscrypt-proxy)
+          VERSION=$(extract_arg "docker/${IMAGE}/Dockerfile" DNSCRYPT_PROXY_VERSION) ;;
+      esac
+      if [ -z "$VERSION" ]; then echo "ERROR: no version extracted for $IMAGE" >&2; exit 1; fi
+      echo "=== build $IMAGE:$VERSION ==="
+      BASE="${IMAGE_REPO}/${IMAGE}"
+      docker build "docker/${IMAGE}" -f "docker/${IMAGE}/Dockerfile" \
+        --label "org.opencontainers.image.version=${VERSION}" \
+        --label "org.opencontainers.image.revision=${CI_COMMIT_SHA}" \
+        --label "org.opencontainers.image.source=https://source.example.com/example-org/proxmox-infra" \
+        -t "${BASE}:latest" -t "${BASE}:${CI_COMMIT_SHA}" -t "${BASE}:${VERSION}"
+      docker push "${BASE}:latest"
+      docker push "${BASE}:${CI_COMMIT_SHA}"
+      docker push "${BASE}:${VERSION}"
+      DIGEST=$(docker inspect --format='{{index .RepoDigests 0}}' "${BASE}:latest" | cut -d@ -f2)
+      echo "${BASE}@${DIGEST}" > "image-ref-${IMAGE}.txt"
+      echo "built $(cat "image-ref-${IMAGE}.txt")"
+  artifacts:
+    # Per-image ref file so the jobs' artifacts don't collide.
+    paths:
+      - image-ref-$IMAGE.txt
+    expire_in: 1 hour
+
+build:pihole:
+  extends: .build-image
+  variables:
+    IMAGE: pihole
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "main" && $CI_PIPELINE_SOURCE == "push"'
+      changes: [docker/pihole/**/*]
+
+build:unbound:
+  extends: .build-image
+  variables:
+    IMAGE: unbound
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "main" && $CI_PIPELINE_SOURCE == "push"'
+      changes: [docker/unbound/**/*]
+
+build:unbound-recursive:
+  extends: .build-image
+  variables:
+    IMAGE: unbound-recursive
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "main" && $CI_PIPELINE_SOURCE == "push"'
+      changes: [docker/unbound-recursive/**/*]
+
+build:dnscrypt-proxy:
+  extends: .build-image
+  variables:
+    IMAGE: dnscrypt-proxy
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "main" && $CI_PIPELINE_SOURCE == "push"'
+      changes: [docker/dnscrypt-proxy/**/*]

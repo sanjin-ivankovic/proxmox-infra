@@ -1,0 +1,32 @@
+---
+# Converge: apply common_users via FQCN.
+# pre_tasks seed a root authorized_keys file, which the role copies to the new
+# user (the live hosts always have one from the Terraform bootstrap key). We do
+# NOT lock/expire root in the test container so molecule can still drive it.
+- name: Converge
+  hosts: all
+  become: true
+  vars:
+    common_users_user: testadmin
+    common_users_lock_root_account: false
+    common_users_expire_root_password: false
+    # common_users pulls in common_system (meta dep); disable its host-specific
+    # steps for the minimal test container (no outbound ICMP, no /bin/ping).
+    common_system_network_check_enabled: false
+    common_system_enable_ping_capability: false
+  pre_tasks:
+    - name: Ensure root .ssh exists
+      ansible.builtin.file:
+        path: /root/.ssh
+        state: directory
+        mode: '0700'
+
+    - name: Seed a root authorized_keys fixture
+      ansible.builtin.copy:
+        content: "ssh-ed25519 AAAAfixturekeyfortest test@molecule\n"
+        dest: /root/.ssh/authorized_keys
+        mode: '0600'
+  tasks:
+    - name: Apply the common_users role
+      ansible.builtin.include_role:
+        name: homelab.proxmox.common_users

@@ -1,0 +1,9 @@
+# Trivy findings intentionally ignored for the proxmox-infra repo.
+#
+# One ID per line — CVE IDs for the image scans (scan:trivy-<image>), Trivy/AVD
+# misconfig IDs for the Terraform scan (scan:trivy-iac). Document WHY inline so
+# an ignore is auditable. Parallels .config/.gitleaksignore — repo-local, passed
+# to the scan jobs via --ignorefile.
+#
+# Seeded empty: findings are triaged in here during the report-only shakeout
+# cycle (TRIVY_EXIT_CODE "0") before the jobs are flipped to blocking.

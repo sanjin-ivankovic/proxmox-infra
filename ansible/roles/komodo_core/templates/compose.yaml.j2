@@ -1,0 +1,61 @@
+## {{ ansible_managed }}
+## Komodo Core + FerretDB v2 — managed by the komodo_core Ansible role.
+## Docs: https://komo.do/docs/setup + https://komo.do/docs/setup/ferretdb
+
+## DB creds are rendered as literals by Ansible (Jinja). docker compose only
+## auto-interpolates ${...} from a file named `.env`; this role writes secrets
+## to compose.env (consumed by `core` via env_file), so the postgres/ferretdb
+## services use baked-in values instead of ${...}.
+services:
+  postgres:
+    image: {{ komodo_core_postgres_image }}
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: "{{ komodo_core_db_username }}"
+      POSTGRES_PASSWORD: "{{ komodo_core_db_password }}"
+      POSTGRES_DB: postgres
+    volumes:
+      - {{ komodo_core_data_dir }}/postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "{{ komodo_core_db_username }}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  ferretdb:
+    image: {{ komodo_core_ferretdb_image }}
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      FERRETDB_POSTGRESQL_URL: "postgres://{{ komodo_core_db_username }}:{{ komodo_core_db_password }}@postgres:5432/postgres"
+    volumes:
+      # Named volume — ferretdb runs as uid 1000 and must own its state dir
+      # (a root-owned host bind-mount gives "permission denied"). Internal
+      # state only; DB durability lives in the postgres bind-mount above.
+      - ferretdb-state:/state
+
+  core:
+    image: ghcr.io/moghtech/komodo-core:{{ komodo_core_image_tag }}
+    restart: unless-stopped
+    depends_on:
+      - ferretdb
+    ports:
+      - "{{ komodo_core_port }}:{{ komodo_core_port }}"
+    env_file: ./compose.env
+    environment:
+      KOMODO_DATABASE_ADDRESS: ferretdb:27017
+    volumes:
+      # Core's Noise keypair — Komodo v2 writes core.key/core.pub to
+      # /config/keys (default private_key = file:/config/keys/core.key).
+      # Persist it on a named volume so the key survives container recreation;
+      # otherwise every redeploy regenerates it and breaks periphery trust.
+      # Back up the komodo_keys volume to avoid re-handshaking on loss.
+      - keys:/config/keys
+      # GitLab git_provider config (env can't express [[git_provider]]).
+      - {{ komodo_core_dir }}/core.config.toml:/config/config.toml:ro
+
+volumes:
+  ferretdb-state:
+  keys:

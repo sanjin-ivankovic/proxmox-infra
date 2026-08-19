@@ -1,0 +1,13 @@
+---
+# ansible/inventory/host_vars/paperless-ngx.yml
+# Host-local Komodo periphery secrets for paperless-ngx.
+# Add the matching vault_paperless_* keys via `make -C ansible vault-edit`.
+# Values sourced from the retired proxmox-infra-env-paperless-ngx sealed secret.
+
+komodo_periphery_secrets:
+  POSTGRES_PASSWORD: "{{ vault_paperless_postgres_password }}"
+  PAPERLESS_SECRET_KEY: "{{ vault_paperless_secret_key }}"
+  PAPERLESS_ADMIN_PASSWORD: "{{ vault_paperless_admin_password }}"
+  PAPERLESS_AI_API_TOKEN: "{{ vault_paperless_ai_api_token }}"
+  # AI provider is "custom" (LiteLLM proxy) — only CUSTOM_API_KEY is in use.
+  CUSTOM_API_KEY: "{{ vault_paperless_custom_api_key }}"

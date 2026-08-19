@@ -1,0 +1,11 @@
+## {{ ansible_managed }}
+## Komodo Core config — only the bits that can't be expressed as env vars.
+## Mounted read-only at /config/config.toml. Mode 0600 (contains a token).
+
+## GitLab git provider — lets Komodo clone the proxmox-infra stack repo.
+[[git_provider]]
+domain = "{{ komodo_core_git_domain }}"
+https = true
+accounts = [
+  { username = "{{ komodo_core_git_username }}", token = "{{ komodo_core_git_token }}" },
+]

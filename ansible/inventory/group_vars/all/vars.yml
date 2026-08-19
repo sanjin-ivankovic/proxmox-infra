@@ -1,0 +1,22 @@
+---
+# ansible/inventory/group_vars/all/vars.yml
+# Global variables for all hosts
+
+# Steady-state connection user (post-bootstrap). The dynamic inventory also
+# emits this as each host's ansible_user; defined here once as the single
+# source of truth for roles that consume `user` (e.g. common_users,
+# common_docker).
+user: maintainer
+
+# common_system's pre-apt connectivity probe target. The role default (1.1.1.1)
+# is a public DoH resolver that this network's Core→WAN "BLOCK DoH 443" rule
+# intentionally drops, so the probe false-fails on every non-admin VLAN (all
+# managed hosts). Point it at the Debian mirror instead: reachable from every
+# VLAN via the Core→WAN ALLOW rule, and probing it validates the real apt
+# precondition (repo reachability + DNS) rather than raw egress to a blocked IP.
+common_system_network_check_host: deb.debian.org
+
+# Komodo Core's address on the homelab network (the `komodo` LXC). Periphery
+# agents restrict inbound connections to this IP, so it lives here as the single
+# source of truth rather than being hardcoded in the komodo_periphery role.
+komodo_core_ip: "10.10.0.14"

@@ -1,0 +1,13 @@
+---
+# ansible/roles/komodo_core/handlers/main.yml
+
+# `present` + pull, not `restarted`: a plain restart reuses each container's
+# existing image, so a bumped tag in the rendered compose file would never
+# take effect. `present` reconciles containers against the compose spec and
+# recreates any whose image changed.
+- name: Restart Komodo Core
+  community.docker.docker_compose_v2:
+    project_src: "{{ komodo_core_dir }}"
+    state: present
+    pull: always
+  listen: restart komodo core

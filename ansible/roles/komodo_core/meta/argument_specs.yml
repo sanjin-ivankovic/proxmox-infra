@@ -1,0 +1,124 @@
+---
+# Argument specification for the komodo_core role.
+# Defaults here MUST match defaults/main.yml. Secret-bearing options default to
+# a Vault lookup ("{{ vault_* }}") — the matching vault_* key must exist in
+# group_vars/all/vault.yml; they are not marked required because the role
+# supplies the Vault-backed default.
+argument_specs:
+  main:
+    short_description: Deploy Komodo Core + FerretDB via docker-compose
+    description:
+      - Renders the Komodo Core compose stack (Core + FerretDB v2 on Postgres)
+        and its environment, then brings it up. Core is the control plane that
+        drives every host's Periphery agent.
+    author:
+      - Maintainer Name
+    options:
+      komodo_core_image_tag:
+        type: str
+        required: false
+        default: "2.2.0"
+        description: Komodo Core image tag (v2 line).
+      komodo_core_ferretdb_image:
+        type: str
+        required: false
+        default: "ghcr.io/ferretdb/ferretdb:2.7.0"
+        description: FerretDB image reference.
+      komodo_core_postgres_image:
+        type: str
+        required: false
+        default: "ghcr.io/ferretdb/postgres-documentdb:17-0.107.0-ferretdb-2.7.0"
+        description:
+          - DocumentDB/FerretDB Postgres image. Bump together with
+            C(komodo_core_ferretdb_image).
+
+      komodo_core_dir:
+        type: path
+        required: false
+        default: /srv/komodo
+        description: On-host directory holding compose + config.
+      komodo_core_data_dir:
+        type: path
+        required: false
+        default: /srv/komodo/data
+        description: On-host directory holding bind-mounted volumes (DB + keys).
+
+      komodo_core_host:
+        type: str
+        required: false
+        default: "https://komodo.example.com"
+        description: Browser-facing URL (must match the Traefik ingress host).
+      komodo_core_port:
+        type: int
+        required: false
+        default: 9120
+        description: Port Core listens on.
+      komodo_core_title:
+        type: str
+        required: false
+        default: "Komodo (homelab)"
+        description: UI title.
+
+      komodo_core_local_auth:
+        type: bool
+        required: false
+        default: true
+        description: Enable local username/password auth.
+      komodo_core_disable_user_registration:
+        type: bool
+        required: false
+        default: true
+        description: Keep self-registration closed.
+      komodo_core_init_admin_username:
+        type: str
+        required: false
+        default: admin
+        description: Username of the first admin created on boot.
+      komodo_core_init_admin_password:
+        type: str
+        required: false
+        default: "{{ vault_komodo_admin_password }}"
+        description: First admin password. Set C(vault_komodo_admin_password) in Vault.
+
+      komodo_core_webhook_secret:
+        type: str
+        required: false
+        default: "{{ vault_komodo_webhook_secret }}"
+        description: Webhook secret (shared with the GitLab webhook). From Vault.
+      komodo_core_jwt_secret:
+        type: str
+        required: false
+        default: "{{ vault_komodo_jwt_secret }}"
+        description: JWT signing secret. From Vault.
+
+      komodo_core_db_username:
+        type: str
+        required: false
+        default: "{{ vault_komodo_db_username | default('komodo') }}"
+        description: FerretDB/Postgres username. From Vault, defaults to komodo.
+      komodo_core_db_password:
+        type: str
+        required: false
+        default: "{{ vault_komodo_db_password }}"
+        description: FerretDB/Postgres password. From Vault.
+      komodo_core_db_name:
+        type: str
+        required: false
+        default: komodo
+        description: Database name.
+
+      komodo_core_git_domain:
+        type: str
+        required: false
+        default: source.example.com
+        description: Git provider domain Komodo clones stack repos from.
+      komodo_core_git_username:
+        type: str
+        required: false
+        default: komodo
+        description: Git account username (ignored by GitLab for token auth).
+      komodo_core_git_token:
+        type: str
+        required: false
+        default: "{{ vault_komodo_gitlab_token }}"
+        description: GitLab group access token (read_repository). From Vault.
