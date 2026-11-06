@@ -1,0 +1,30 @@
+# ============================================================================
+# Docker Builds .gitignore
+# ============================================================================
+# Ignore Docker build artifacts and custom image outputs
+# ============================================================================
+
+# Docker build cache
+.docker/
+.dockerignore.bak
+
+# Build artifacts
+*.tar
+*.tar.gz
+*.img
+*.iso
+
+# Custom image outputs
+images/
+builds/
+output/
+
+# Temporary build files
+*.tmp
+*.temp
+build.log
+*.build.log
+
+# Docker Compose override files (may contain secrets)
+docker-compose.override.yml
+docker-compose.local.yml

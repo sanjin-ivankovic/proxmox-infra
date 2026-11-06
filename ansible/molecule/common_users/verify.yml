@@ -1,0 +1,41 @@
+---
+# Verify: assert common_users created the admin user with sudo + ssh key.
+- name: Verify
+  hosts: all
+  become: true
+  vars:
+    common_users_user: testadmin
+  tasks:
+    - name: Get the admin user entry
+      ansible.builtin.getent:
+        database: passwd
+        key: "{{ common_users_user }}"
+
+    - name: Assert the user exists with a bash shell
+      ansible.builtin.assert:
+        that:
+          - ansible_facts.getent_passwd[common_users_user][5] == '/bin/bash'
+        fail_msg: "common_users did not create {{ common_users_user }} correctly"
+
+    - name: Check the sudoers drop-in exists
+      ansible.builtin.command: "sudo -l -U {{ common_users_user }}"
+      register: sudo_check
+      changed_when: false
+
+    - name: Assert passwordless sudo is granted
+      ansible.builtin.assert:
+        that:
+          - "'(ALL) NOPASSWD: ALL' in sudo_check.stdout or 'NOPASSWD' in sudo_check.stdout"
+        fail_msg: "passwordless sudo was not configured for {{ common_users_user }}"
+
+    - name: Check the copied authorized_keys
+      ansible.builtin.stat:
+        path: "/home/{{ common_users_user }}/.ssh/authorized_keys"
+      register: ak
+
+    - name: Assert authorized_keys was copied
+      ansible.builtin.assert:
+        that:
+          - ak.stat.exists
+          - ak.stat.mode == '0600'
+        fail_msg: "authorized_keys was not copied to {{ common_users_user }}"

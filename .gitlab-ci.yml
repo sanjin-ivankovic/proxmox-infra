@@ -1,0 +1,514 @@
+---
+# =============================================================================
+# GitLab CI/CD pipeline for proxmox-infra (Terraform + Ansible + custom images).
+#
+# Runs on the homelab gitlab-runner (Docker executor binding the host docker
+# socket — tags: [docker]).
+#
+# CI is LINT + IMAGE BUILD/SIGN ONLY. Deploy is Komodo's job: a GitLab push
+# triggers Komodo Core's own webhook → ResourceSync reconcile, independent of
+# this pipeline (it neither gates nor blocks Komodo).
+#
+# Quality is NATIVE per-tool jobs (fail-fast, individually gated), NOT a
+# pre-commit blob. pre-commit stays a LOCAL dev hook only — never run in CI.
+#
+# Shared jobs come from homelab/ci-components CI/CD COMPONENTS (version-pinned below,
+# Renovate-tracked). Since 2.0.0 every component's `image` input defaults to
+# this repo's $CI_IMAGE (proxmox-infra/ci, a thin FROM ci-base layer carrying
+# OpenTofu + trivy + ansible), so includes only state non-default inputs. The
+# terraform/ansible lint and the custom image build jobs are proxmox-only and
+# stay inline.
+#
+# Harbor auth: GitLab Harbor integration (group homelab) injects $HARBOR_*.
+# Secrets via group CI/CD variables: COSIGN_KEY/COSIGN_PASSWORD, RENOVATE_*,
+# GITHUB_PUBLISH_TOKEN.
+# =============================================================================
+
+default:
+  tags:
+    - docker
+  # New pushes auto-cancel superseded pipelines (see workflow:auto_cancel);
+  # side-effecting jobs opt OUT below with interruptible: false.
+  interruptible: true
+
+variables:
+  CI_IMAGE: $HARBOR_HOST/example-org/proxmox-infra/ci:latest
+  IMAGE_REPO: $HARBOR_HOST/example-org/proxmox-infra
+  GIT_DEPTH: "50"
+
+stages:
+  - scan
+  - lint
+  - test
+  - image
+  - mirror
+
+workflow:
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "schedule"'
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+    - if: '$CI_COMMIT_BRANCH == "main" && $CI_PIPELINE_SOURCE == "push"'
+    - when: never
+  auto_cancel:
+    on_new_commit: interruptible
+
+# -----------------------------------------------------------------------------
+# Shared CI/CD components (homelab/ci-components, pinned below). Each reads this
+# repo's own .config/ rule files (falling back to the defaults baked into
+# ci-base at /opt/ci/config/) and runs on $CI_IMAGE by default.
+# -----------------------------------------------------------------------------
+include:
+  # Secret scan + per-tool lint (yaml/shell/markdown).
+  - component: $CI_SERVER_FQDN/homelab/ci-components/scan-secrets@4.2.1
+  - component: $CI_SERVER_FQDN/homelab/ci-components/lint-yaml@4.2.1
+  - component: $CI_SERVER_FQDN/homelab/ci-components/lint-shell@4.2.1
+  - component: $CI_SERVER_FQDN/homelab/ci-components/lint-markdown@4.2.1
+  # Conventional-commit gate on MRs (commit grammar feeds release automation).
+  - component: $CI_SERVER_FQDN/homelab/ci-components/lint-commits@4.2.1
+
+  # (no test-ci-scripts: this repo has no .ci/scripts Python; the publish/
+  # sanitize tooling is provided by ci-base at /opt/ci.)
+
+  # Terraform misconfig/IaC scan (trivy config understands HCL natively).
+  - component: $CI_SERVER_FQDN/homelab/ci-components/trivy-config@4.2.1
+    inputs:
+      job_name: "scan:trivy-iac"
+      target: terraform
+      exit_code: "1"
+      rules:
+        - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+          changes: [terraform/**/*, .config/.trivyignore]
+        - if: '$CI_COMMIT_BRANCH == "main" && $CI_PIPELINE_SOURCE == "push"'
+          changes: [terraform/**/*, .config/.trivyignore]
+
+  # Build + sign + SBOM-attest this repo's CI image (rebuild on the Dockerfile
+  # or on a SCHEDULE_TYPE=rebuild schedule; the /opt/ci publish tooling is
+  # provided by ci-base).
+  - component: $CI_SERVER_FQDN/homelab/ci-components/ci-image@4.2.1
+    inputs:
+      image_name: example-org/proxmox-infra/ci
+      changes: [.ci/docker/Dockerfile]
+  - component: $CI_SERVER_FQDN/homelab/ci-components/cosign-sign@4.2.1
+    inputs:
+      job_name: "sign:ci-image"
+      needs_job: "build:ci-image"
+      rules:
+        - if: '$CI_PIPELINE_SOURCE == "schedule" && $SCHEDULE_TYPE == "rebuild"'
+        - if: '$CI_COMMIT_BRANCH == "main" && $CI_PIPELINE_SOURCE == "push"'
+          changes: [.ci/docker/Dockerfile]
+  - component: $CI_SERVER_FQDN/homelab/ci-components/sbom-attest@4.2.1
+    inputs:
+      job_name: "sbom:ci-image"
+      needs_job: "build:ci-image"
+      # syft lives in ci-base, not in this repo's thin image (and the thin
+      # image lags ci-base by a Renovate digest bump). SBOM generation needs
+      # no repo-specific tools, so run it on ci-base directly.
+      image: $HARBOR_HOST/homelab/ci-components/ci:latest
+      rules:
+        - if: '$CI_PIPELINE_SOURCE == "schedule" && $SCHEDULE_TYPE == "rebuild"'
+        - if: '$CI_COMMIT_BRANCH == "main" && $CI_PIPELINE_SOURCE == "push"'
+          changes: [.ci/docker/Dockerfile]
+
+  # --- per app-image: cosign sign + SBOM attest, chained off the image's build
+  # job ("build:<img>", which scans before it pushes) via its own ref artifact.
+  - component: $CI_SERVER_FQDN/homelab/ci-components/cosign-sign@4.2.1
+    inputs:
+      job_name: "sign:pihole"
+      needs_job: "build:pihole"
+      ref_file: image-ref-pihole.txt
+      rules:
+        - if: '$CI_COMMIT_BRANCH == "main" && $CI_PIPELINE_SOURCE == "push"'
+          changes: [docker/pihole/**/*]
+  - component: $CI_SERVER_FQDN/homelab/ci-components/sbom-attest@4.2.1
+    inputs:
+      job_name: "sbom:pihole"
+      # syft lives in ci-base, not the thin image (see sbom:ci-image note).
+      image: $HARBOR_HOST/homelab/ci-components/ci:latest
+      needs_job: "build:pihole"
+      ref_file: image-ref-pihole.txt
+      rules:
+        - if: '$CI_COMMIT_BRANCH == "main" && $CI_PIPELINE_SOURCE == "push"'
+          changes: [docker/pihole/**/*]
+
+  - component: $CI_SERVER_FQDN/homelab/ci-components/cosign-sign@4.2.1
+    inputs:
+      job_name: "sign:unbound"
+      needs_job: "build:unbound"
+      ref_file: image-ref-unbound.txt
+      rules:
+        - if: '$CI_COMMIT_BRANCH == "main" && $CI_PIPELINE_SOURCE == "push"'
+          changes: [docker/unbound/**/*]
+  - component: $CI_SERVER_FQDN/homelab/ci-components/sbom-attest@4.2.1
+    inputs:
+      job_name: "sbom:unbound"
+      # syft lives in ci-base, not the thin image (see sbom:ci-image note).
+      image: $HARBOR_HOST/homelab/ci-components/ci:latest
+      needs_job: "build:unbound"
+      ref_file: image-ref-unbound.txt
+      rules:
+        - if: '$CI_COMMIT_BRANCH == "main" && $CI_PIPELINE_SOURCE == "push"'
+          changes: [docker/unbound/**/*]
+
+  - component: $CI_SERVER_FQDN/homelab/ci-components/cosign-sign@4.2.1
+    inputs:
+      job_name: "sign:unbound-recursive"
+      needs_job: "build:unbound-recursive"
+      ref_file: image-ref-unbound-recursive.txt
+      rules:
+        - if: '$CI_COMMIT_BRANCH == "main" && $CI_PIPELINE_SOURCE == "push"'
+          changes: [docker/unbound-recursive/**/*]
+  - component: $CI_SERVER_FQDN/homelab/ci-components/sbom-attest@4.2.1
+    inputs:
+      job_name: "sbom:unbound-recursive"
+      # syft lives in ci-base, not the thin image (see sbom:ci-image note).
+      image: $HARBOR_HOST/homelab/ci-components/ci:latest
+      needs_job: "build:unbound-recursive"
+      ref_file: image-ref-unbound-recursive.txt
+      rules:
+        - if: '$CI_COMMIT_BRANCH == "main" && $CI_PIPELINE_SOURCE == "push"'
+          changes: [docker/unbound-recursive/**/*]
+
+  - component: $CI_SERVER_FQDN/homelab/ci-components/cosign-sign@4.2.1
+    inputs:
+      job_name: "sign:dnscrypt-proxy"
+      needs_job: "build:dnscrypt-proxy"
+      ref_file: image-ref-dnscrypt-proxy.txt
+      rules:
+        - if: '$CI_COMMIT_BRANCH == "main" && $CI_PIPELINE_SOURCE == "push"'
+          changes: [docker/dnscrypt-proxy/**/*]
+  - component: $CI_SERVER_FQDN/homelab/ci-components/sbom-attest@4.2.1
+    inputs:
+      job_name: "sbom:dnscrypt-proxy"
+      # syft lives in ci-base, not the thin image (see sbom:ci-image note).
+      image: $HARBOR_HOST/homelab/ci-components/ci:latest
+      needs_job: "build:dnscrypt-proxy"
+      ref_file: image-ref-dnscrypt-proxy.txt
+      rules:
+        - if: '$CI_COMMIT_BRANCH == "main" && $CI_PIPELINE_SOURCE == "push"'
+          changes: [docker/dnscrypt-proxy/**/*]
+
+  - component: $CI_SERVER_FQDN/homelab/ci-components/cosign-sign@4.2.1
+    inputs:
+      job_name: "sign:semaphore"
+      needs_job: "build:semaphore"
+      ref_file: image-ref-semaphore.txt
+      rules:
+        - if: '$CI_COMMIT_BRANCH == "main" && $CI_PIPELINE_SOURCE == "push"'
+          changes: [docker/semaphore/**/*]
+  - component: $CI_SERVER_FQDN/homelab/ci-components/sbom-attest@4.2.1
+    inputs:
+      job_name: "sbom:semaphore"
+      # syft lives in ci-base, not the thin image (see sbom:ci-image note).
+      image: $HARBOR_HOST/homelab/ci-components/ci:latest
+      needs_job: "build:semaphore"
+      ref_file: image-ref-semaphore.txt
+      rules:
+        - if: '$CI_COMMIT_BRANCH == "main" && $CI_PIPELINE_SOURCE == "push"'
+          changes: [docker/semaphore/**/*]
+
+  # GitHub portfolio mirror (sanitize → verify → force-push; /opt/ci tooling).
+  # Failure alert for main pipelines (ntfy topic gitlab-pipelines). Runs on
+  # ci-base: the job needs python3 + requests, which this repo's CI image
+  # does not carry.
+  - component: $CI_SERVER_FQDN/homelab/ci-components/notify-ntfy@4.2.1
+    inputs:
+      image: $HARBOR_HOST/homelab/ci-components/ci:latest
+  - component: $CI_SERVER_FQDN/homelab/ci-components/mirror-github@4.2.1
+    inputs:
+      # The /opt/ci publish tooling AND the sanitize-base this repo extends
+      # live in ci-base; the thin image lags ci-base by a digest bump, so
+      # run the mirror on ci-base directly (the pre-2.0 behavior).
+      image: $HARBOR_HOST/homelab/ci-components/ci:latest
+      repo_name: proxmox-infra
+
+# -----------------------------------------------------------------------------
+# Terraform + Ansible lint — proxmox-only tooling, stays inline (not every repo
+# needs terraform/ansible). Runs on $CI_IMAGE (which carries both).
+# -----------------------------------------------------------------------------
+lint:terraform:
+  stage: lint
+  image: $CI_IMAGE
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+      changes: &tf-changes
+        - terraform/**/*
+    - if: '$CI_COMMIT_BRANCH == "main" && $CI_PIPELINE_SOURCE == "push"'
+      changes: *tf-changes
+  script:
+    - tofu fmt -check -recursive terraform/
+
+# Backend-less validate of both Terragrunt units. The terragrunt-generated
+# files (backend.tf / versions.tf / provider.tf) are absent on a fresh
+# checkout, but init -backend=false still resolves providers because each
+# module's committed versions.tf declares its required_providers — verified to
+# init + validate cleanly from a bare `git archive` tree.
+validate:terraform:
+  stage: lint
+  image: $CI_IMAGE
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+      changes: *tf-changes
+    - if: '$CI_COMMIT_BRANCH == "main" && $CI_PIPELINE_SOURCE == "push"'
+      changes: *tf-changes
+  script:
+    - |
+      set -e
+      for dir in terraform/lxc terraform/talos terraform/unifi; do
+        echo "=== validate $dir ==="
+        tofu -chdir="$dir" init -backend=false -input=false
+        tofu -chdir="$dir" validate
+      done
+
+lint:ansible:
+  stage: lint
+  image: $CI_IMAGE
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+      changes: &ansible-changes
+        - ansible/**/*
+    - if: '$CI_COMMIT_BRANCH == "main" && $CI_PIPELINE_SOURCE == "push"'
+      changes: *ansible-changes
+  script:
+    - env ANSIBLE_ROLES_PATH=ansible/roles ansible-lint -c ansible/.ansible-lint
+
+# Komodo resources and the compose files they deploy: TOML structure, server
+# and repo references, `docker compose config` with each stack's env, and the
+# policy findings (match tag, mounted files in config_files).
+# Hand-written host IPs (Komodo, Technitium, patch probes, Talos inventory and
+# node patches) must match the Terraform instance tfvars.
+lint:host-ips:
+  stage: lint
+  image: $CI_IMAGE
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+      changes: &host-ip-changes
+        - terraform/lxc/instances/*
+        - terraform/talos/instances/*
+        - komodo/servers.toml
+        - ansible/configs/technitium.yml
+        - ansible/inventory/group_vars/all/patching.yml
+        - ansible/inventory/talos/hosts.yml
+        - ansible/talos/patches/nodes/*
+        - scripts/check_ips.py
+    - if: '$CI_COMMIT_BRANCH == "main" && $CI_PIPELINE_SOURCE == "push"'
+      changes: *host-ip-changes
+  script:
+    - python3 scripts/check_ips.py
+
+lint:komodo:
+  stage: lint
+  image: $CI_IMAGE
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+      changes: &komodo-changes
+        - komodo/**/*
+        - services/**/*
+        - docker/**/*
+        - scripts/komodo_lint.py
+    - if: '$CI_COMMIT_BRANCH == "main" && $CI_PIPELINE_SOURCE == "push"'
+      changes: *komodo-changes
+  script:
+    - python3 scripts/komodo_lint.py --strict --require-docker
+
+# Prove the playbooks parse, the inventory script fails cleanly without
+# terragrunt, and every role's argument_specs render. Runs in $CI_IMAGE.
+test:playbooks:
+  stage: test
+  image: $CI_IMAGE
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+      changes: *ansible-changes
+    - if: '$CI_COMMIT_BRANCH == "main" && $CI_PIPELINE_SOURCE == "push"'
+      changes: *ansible-changes
+  script:
+    # A minimal CI ansible.cfg, loaded explicitly so ansible doesn't warn about
+    # the in-tree config under GitLab's world-writable build dir (and so it
+    # skips the dev cfg's relative paths + vault file that don't apply here).
+    - export ANSIBLE_CONFIG="$CI_PROJECT_DIR/.ci/ansible-ci.cfg"
+    - cd ansible
+    # Playbooks parse (host lifecycle + komodo + talos orchestrators).
+    - ansible-playbook playbooks/site.yml --syntax-check
+    - ansible-playbook playbooks/hosts/pihole-reset.yml --syntax-check
+    - ansible-playbook playbooks/komodo/core.yml playbooks/komodo/periphery.yml --syntax-check
+    - ansible-playbook -i inventory/talos/hosts.yml playbooks/talos/deploy.yml --syntax-check
+    - ansible-playbook -i inventory/talos/hosts.yml playbooks/talos/operate.yml --syntax-check
+    - ansible-playbook -i inventory/talos/hosts.yml playbooks/talos/lifecycle.yml --syntax-check
+    - ansible-playbook -i inventory/talos/hosts.yml playbooks/talos/etcd-backup.yml --syntax-check
+    # Inventory script self-check. CI has no terragrunt, so --doctor reports
+    # problems and exits non-zero by design; what this asserts is that it fails
+    # CLEANLY rather than tracebacks. A stack trace here is a real defect.
+    - |
+      out=$(python3 inventory/terraform_state_inventory.py --doctor 2>&1) || true
+      echo "$out"
+      if echo "$out" | grep -q "^Traceback"; then
+        echo "ERROR: inventory --doctor crashed instead of reporting" >&2
+        exit 1
+      fi
+    # Every role's argument_specs render (proves they parse + are well-formed).
+    - for r in common_system common_users common_ssh common_authorized_keys common_docker os_patch komodo_core komodo_periphery talos_cluster; do
+        ansible-doc -t role -r roles "$r" >/dev/null || exit 1;
+      done
+
+# Molecule role tests (converge + idempotence + verify) for the common_* roles.
+# Runs in $CI_IMAGE (ships molecule + the Docker driver) and drives containers
+# over the runner's host Docker socket. Gated to role/scenario changes only —
+# it's slower than the other jobs and unaffected by playbook/inventory edits.
+# See ansible/molecule/README.md.
+test:molecule:
+  stage: test
+  image: $CI_IMAGE
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+      changes:
+        - ansible/roles/**/*
+        - ansible/molecule/**/*
+    - if: '$CI_COMMIT_BRANCH == "main" && $CI_PIPELINE_SOURCE == "push"'
+      changes:
+        - ansible/roles/**/*
+        - ansible/molecule/**/*
+  script:
+    # Minimal CI ansible.cfg loaded explicitly (no world-writable warning, no
+    # dev cfg relative-path/vault baggage); molecule inherits it.
+    - export ANSIBLE_CONFIG="$CI_PROJECT_DIR/.ci/ansible-ci.cfg"
+    - cd ansible
+    - for s in common_system common_users common_ssh os_patch; do molecule test -s "$s"; done
+
+# -----------------------------------------------------------------------------
+# Custom app-image builds. One job per image ("build:<img>", targeted by the
+# sign/sbom component includes above via needs_job), each gated on its own
+# docker/<img>/ subtree so a change to one image builds, scans, signs and
+# attests exactly that image — a matrix job can't do this because rules:changes
+# is evaluated once for all instances, and rebuilding unchanged images would
+# push digests the per-image sign jobs never re-sign. The semver extract awk is
+# the one bit GitLab can't do natively (per-Dockerfile parsing). Main-push only.
+#
+# trivy scans the image in the host daemon BEFORE any push: a CRITICAL finding
+# (outside .config/.trivyignore) fails the job with nothing in Harbor, so
+# Renovate never offers the tag and Komodo never pulls it.
+# -----------------------------------------------------------------------------
+.build-image:
+  stage: image
+  # docker CLI + buildx + trivy: build, scan and push in one job.
+  image: $CI_IMAGE
+  needs: []
+  interruptible: false
+  variables:
+    DOCKER_CONFIG: $CI_PROJECT_DIR/.docker
+    TRIVY_CACHE_DIR: .trivycache
+  cache:
+    key: trivy-db
+    paths:
+      - .trivycache
+  before_script:
+    - mkdir -p "$DOCKER_CONFIG"
+    - echo "$HARBOR_PASSWORD" | docker login "$HARBOR_HOST" -u "$HARBOR_USERNAME" --password-stdin
+  script:
+    - |
+      set -e
+      extract_arg() {
+        awk -v arg="$2" '
+          $1 == "ARG" && index($2, arg"=") == 1 {
+            v = substr($2, length(arg) + 2)
+            gsub(/^["'"'"']|["'"'"']$/, "", v)
+            print v; exit
+          }' "$1"
+      }
+      case "$IMAGE" in
+        pihole)
+          VERSION=$(awk -F'[: @]' '/^FROM[[:space:]]+pihole\/pihole:/{print $3; exit}' "docker/${IMAGE}/Dockerfile") ;;
+        unbound|unbound-recursive)
+          VERSION=$(extract_arg "docker/${IMAGE}/Dockerfile" UNBOUND_VERSION) ;;
+        dnscrypt-proxy)
+          VERSION=$(extract_arg "docker/${IMAGE}/Dockerfile" DNSCRYPT_PROXY_VERSION) ;;
+        semaphore)
+          # ARG is "vX.Y.Z@sha256:..." — strip the digest and the leading v so
+          # the image tag matches the compose reference (2.19.8).
+          VERSION=$(extract_arg "docker/${IMAGE}/Dockerfile" SEMAPHORE_VERSION | cut -d@ -f1 | sed 's/^v//') ;;
+      esac
+      if [ -z "$VERSION" ]; then echo "ERROR: no version extracted for $IMAGE" >&2; exit 1; fi
+      echo "=== build $IMAGE:$VERSION ==="
+      BASE="${IMAGE_REPO}/${IMAGE}"
+      docker build "docker/${IMAGE}" -f "docker/${IMAGE}/Dockerfile" \
+        --label "org.opencontainers.image.version=${VERSION}" \
+        --label "org.opencontainers.image.revision=${CI_COMMIT_SHA}" \
+        --label "org.opencontainers.image.source=$CI_PROJECT_URL" \
+        -t "${BASE}:latest" -t "${BASE}:${CI_COMMIT_SHA}" -t "${BASE}:${VERSION}"
+      echo "=== trivy ${IMAGE}:${VERSION} (local, before push) ==="
+      trivy image --image-src docker --severity CRITICAL --exit-code 1 \
+        --ignorefile .config/.trivyignore --cache-dir "$TRIVY_CACHE_DIR" \
+        "${BASE}:${CI_COMMIT_SHA}"
+      docker push "${BASE}:${CI_COMMIT_SHA}"
+      docker push "${BASE}:${VERSION}"
+      docker push "${BASE}:latest"
+      # The digest comes from the registry by the commit tag only this build
+      # pushed. The daemon's RepoDigests list keeps every digest the name ever
+      # had, so its first entry can be an older build.
+      DIGEST=$(docker buildx imagetools inspect "${BASE}:${CI_COMMIT_SHA}" --format '{{.Manifest.Digest}}')
+      echo "${BASE}@${DIGEST}" > "image-ref-${IMAGE}.txt"
+      echo "built $(cat "image-ref-${IMAGE}.txt")"
+  artifacts:
+    # Per-image ref file so the jobs' artifacts don't collide.
+    paths:
+      - image-ref-$IMAGE.txt
+    expire_in: 1 hour
+
+build:pihole:
+  extends: .build-image
+  variables:
+    IMAGE: pihole
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "main" && $CI_PIPELINE_SOURCE == "push"'
+      changes: [docker/pihole/**/*]
+
+build:unbound:
+  extends: .build-image
+  variables:
+    IMAGE: unbound
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "main" && $CI_PIPELINE_SOURCE == "push"'
+      changes: [docker/unbound/**/*]
+
+build:unbound-recursive:
+  extends: .build-image
+  variables:
+    IMAGE: unbound-recursive
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "main" && $CI_PIPELINE_SOURCE == "push"'
+      changes: [docker/unbound-recursive/**/*]
+
+build:dnscrypt-proxy:
+  extends: .build-image
+  variables:
+    IMAGE: dnscrypt-proxy
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "main" && $CI_PIPELINE_SOURCE == "push"'
+      changes: [docker/dnscrypt-proxy/**/*]
+
+build:semaphore:
+  extends: .build-image
+  variables:
+    IMAGE: semaphore
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "main" && $CI_PIPELINE_SOURCE == "push"'
+      changes: [docker/semaphore/**/*]
+
+# A rebuilt image re-pushes its existing tag, which no compose change follows,
+# so CI asks Komodo to redeploy the consumers ("Redeploy Images" procedure,
+# komodo/procedures.toml). KOMODO_WEBHOOK_SECRET: masked, protected project
+# variable holding vault_komodo_webhook_secret.
+komodo:redeploy-images:
+  stage: image
+  image: $CI_IMAGE
+  interruptible: false
+  needs:
+    - job: build:pihole
+      optional: true
+    - job: build:unbound
+      optional: true
+    - job: build:semaphore
+      optional: true
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "main" && $CI_PIPELINE_SOURCE == "push"'
+      changes: [docker/pihole/**/*, docker/unbound/**/*, docker/semaphore/**/*]
+  script:
+    - python3 scripts/komodo_trigger.py "Redeploy Images"

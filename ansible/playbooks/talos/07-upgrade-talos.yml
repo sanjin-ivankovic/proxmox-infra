@@ -1,0 +1,247 @@
+---
+# ============================================================================
+# Upgrade Talos OS Version
+# ============================================================================
+# Performs a rolling upgrade of Talos OS across all nodes, control planes
+# first, one node at a time. Before each node it waits for every attached
+# Longhorn volume to be healthy: with 3 workers and 3 hard-anti-affinity
+# replicas, upgrading the next worker while replicas are still rebuilding
+# leaves one node holding the last healthy copy, and Longhorn's
+# block-if-contains-last-replica drain policy then stalls the drain.
+#
+# Usage:
+#   make upgrade  # Will prompt for version
+#   OR
+#   ansible-playbook -i inventory/hosts.yml 07-upgrade-talos.yml -e "talos_version=v1.13.0"
+# ============================================================================
+
+- name: Snapshot etcd before upgrading
+  hosts: localhost
+  gather_facts: false
+  become: false
+
+  tasks:
+    # First, before the snapshot is named after the value and before the next
+    # play cordons and drains a node.
+    - name: Require a vX.Y.Z talos_version
+      ansible.builtin.assert:
+        that:
+          - talos_version is defined
+          - talos_version is match('^v[0-9]+\\.[0-9]+\\.[0-9]+$')
+        fail_msg: "talos_version must be vX.Y.Z (e.g. -e talos_version=v1.14.5), got '{{ talos_version | default('') }}'"
+        quiet: true
+
+    - name: Save etcd snapshot to the configs directory
+      ansible.builtin.command:
+        cmd: >
+          talosctl etcd snapshot
+          {{ talos_config_dir }}/etcd-pre-upgrade-{{ talos_version }}.db
+          --talosconfig {{ talos_config_file }}
+          --nodes {{ hostvars[groups['controlplane'][0]].ansible_host }}
+          --endpoints {{ talos_upgrade_endpoint }}
+        creates: '{{ talos_config_dir }}/etcd-pre-upgrade-{{ talos_version }}.db'
+
+- name: Upgrade Talos cluster
+  hosts: talos
+  gather_facts: false
+  become: false  # Talos uses API - no privilege escalation needed
+  connection: local
+  serial: 1 # Upgrade one node at a time
+
+  tasks:
+    - name: Fail if talos_version not specified
+      ansible.builtin.fail:
+        msg: "talos_version variable required (e.g., -e 'talos_version=v1.13.0')"
+      when: talos_version is not defined
+      run_once: true
+
+    # Skip nodes already running the target version. Without this, every node
+    # is re-cordoned/drained/upgraded even when already current — wasteful, and
+    # for a control-plane node that currently holds the VIP it makes
+    # `talosctl upgrade` lose its own connection mid-reboot (spurious exit 1,
+    # halting the whole rolling upgrade before the workers are reached).
+    - name: Detect current Talos version on node
+      ansible.builtin.command:
+        cmd: >
+          talosctl version
+          --talosconfig {{ talos_config_file }}
+          --nodes {{ ansible_host }}
+          --endpoints {{ talos_upgrade_endpoint }}
+      environment:
+        TALOSCONFIG: '{{ talos_config_file }}'
+      register: node_version_raw
+      changed_when: false
+      delegate_to: localhost
+
+    # `talosctl version` prints the Client Tag first, then the Server Tag — so
+    # the LAST `Tag:` line is the node's running (server) version. (A node-self
+    # regex on "Server:" is unreliable due to tab/space layout.)
+    - name: Set needs_upgrade fact (current server version vs target)
+      ansible.builtin.set_fact:
+        node_current_version: "{{ node_version_raw.stdout | regex_findall('Tag:\\s*(\\S+)') | last }}"
+        needs_upgrade: "{{ (node_version_raw.stdout | regex_findall('Tag:\\s*(\\S+)') | last) != talos_version }}"
+
+    - name: Report node already on target version (skipping)
+      ansible.builtin.debug:
+        msg: "↷ {{ inventory_hostname }} already on {{ talos_version }} — skipping"
+      when: not needs_upgrade
+
+    # Detached volumes report robustness "unknown" and are ignored.
+    - name: Wait for all attached Longhorn volumes to be healthy
+      ansible.builtin.command:
+        cmd: >
+          kubectl --kubeconfig {{ talos_kubeconfig_file }}
+          -n longhorn-system get volumes.longhorn.io
+          -o 'jsonpath={range .items[*]}{.metadata.name}{" "}{.status.state}{" "}{.status.robustness}{"\n"}{end}'
+      register: longhorn_volumes
+      changed_when: false
+      until: >-
+        longhorn_volumes.rc == 0 and
+        (longhorn_volumes.stdout_lines
+          | select('search', ' attached ')
+          | reject('search', ' healthy$')
+          | list | length) == 0
+      retries: 240
+      delay: 15
+      delegate_to: localhost
+      when: needs_upgrade
+
+    - name: Wait for all etcd members to report healthy
+      ansible.builtin.command:
+        cmd: >
+          talosctl etcd status
+          --talosconfig {{ talos_config_file }}
+          --nodes {{ groups['controlplane'] | map('extract', hostvars, 'ansible_host') | join(',') }}
+          --endpoints {{ talos_upgrade_endpoint }}
+      register: etcd_status
+      changed_when: false
+      until: >-
+        etcd_status.rc == 0 and
+        (etcd_status.stdout_lines[1:] | length) == (groups['controlplane'] | length)
+      retries: 40
+      delay: 15
+      delegate_to: localhost
+      when:
+        - needs_upgrade
+        - "'controlplane' in group_names"
+
+    - name: Cordon node before upgrade
+      ansible.builtin.command:
+        cmd: >
+          kubectl --kubeconfig {{ talos_kubeconfig_file }} cordon {{ inventory_hostname }}
+      environment:
+        KUBECONFIG: '{{ talos_kubeconfig_file }}'
+      register: cordon_result
+      changed_when: cordon_result.rc == 0
+      failed_when: false
+      delegate_to: localhost
+      when: needs_upgrade
+
+    - name: Drain node workloads
+      ansible.builtin.command:
+        cmd: >
+          kubectl --kubeconfig {{ talos_kubeconfig_file }} drain {{ inventory_hostname }}
+          --ignore-daemonsets
+          --delete-emptydir-data
+          --timeout=300s
+          --force
+      environment:
+        KUBECONFIG: '{{ talos_kubeconfig_file }}'
+      register: drain_result
+      changed_when: drain_result.rc == 0
+      failed_when: false
+      delegate_to: localhost
+      when: needs_upgrade
+
+    # NOTE: --endpoints must point at a CONTROL-PLANE node, NOT the target node.
+    # talosctl upgrade runs an internal Kubernetes drain that fetches kubeconfig
+    # via the endpoint, and only control-plane nodes serve kubeconfig. Pointing
+    # --endpoints at a worker fails with "kubeconfig is only available on control
+    # plane nodes" AFTER the install completes (leaving the node cordoned and
+    # un-rebooted). Use the control-plane VIP (10.140.0.40) as a stable endpoint.
+    - name: Upgrade Talos OS - {{ inventory_hostname }}
+      ansible.builtin.command:
+        cmd: >
+          talosctl upgrade
+          --talosconfig {{ talos_config_file }}
+          --nodes {{ ansible_host }}
+          --endpoints {{ talos_upgrade_endpoint }}
+          --image {{ talos_installer_image }}
+      environment:
+        TALOSCONFIG: '{{ talos_config_file }}'
+      register: upgrade_result
+      changed_when: upgrade_result.rc == 0
+      delegate_to: localhost
+      when: needs_upgrade
+
+    - name: Wait for node to reboot
+      ansible.builtin.wait_for:
+        host: '{{ ansible_host }}'
+        port: 50000
+        delay: 30
+        timeout: 600
+      delegate_to: localhost
+      when: needs_upgrade
+
+    - name: Uncordon node after upgrade
+      ansible.builtin.command:
+        cmd: >
+          kubectl --kubeconfig {{ talos_kubeconfig_file }} uncordon {{ inventory_hostname }}
+      environment:
+        KUBECONFIG: '{{ talos_kubeconfig_file }}'
+      register: uncordon_result
+      changed_when: uncordon_result.rc == 0
+      delegate_to: localhost
+      when: needs_upgrade
+
+    - name: Verify node health after upgrade (control plane)
+      ansible.builtin.command:
+        cmd: >
+          talosctl health
+          --talosconfig {{ talos_config_file }}
+          --nodes {{ ansible_host }}
+          --endpoints {{ ansible_host }}
+          --server=false
+          --wait-timeout 5m
+      environment:
+        TALOSCONFIG: '{{ talos_config_file }}'
+      register: health
+      changed_when: false
+      delegate_to: localhost
+      when:
+        - needs_upgrade
+        - "'controlplane' in group_names"
+
+    - name: Verify node health after upgrade (worker)
+      ansible.builtin.command:
+        cmd: >
+          kubectl --kubeconfig {{ talos_kubeconfig_file }}
+          wait node/{{ inventory_hostname }}
+          --for=condition=Ready
+          --timeout=5m
+      environment:
+        KUBECONFIG: '{{ talos_kubeconfig_file }}'
+      register: health
+      changed_when: false
+      delegate_to: localhost
+      when:
+        - needs_upgrade
+        - "'workers' in group_names"
+
+    - name: Confirm node runs the target version
+      ansible.builtin.command:
+        cmd: >
+          talosctl version
+          --talosconfig {{ talos_config_file }}
+          --nodes {{ ansible_host }}
+          --endpoints {{ talos_upgrade_endpoint }}
+      register: node_version_after
+      changed_when: false
+      failed_when: (node_version_after.stdout | regex_findall('Tag:\\s*(\\S+)') | last) != talos_version
+      delegate_to: localhost
+      when: needs_upgrade
+
+    - name: Display upgrade status
+      ansible.builtin.debug:
+        msg: '✓ {{ inventory_hostname }} upgraded to {{ talos_version }} and healthy'
+      when: needs_upgrade

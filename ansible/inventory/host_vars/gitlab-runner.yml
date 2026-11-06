@@ -1,0 +1,19 @@
+---
+# ansible/inventory/host_vars/gitlab-runner.yml
+# Host-local Komodo periphery secrets for gitlab-runner. Real values live ONLY
+# here (rendered into the host's periphery.config.toml), referenced from the
+# stack in komodo/stacks.toml as [[NAME]].
+# Add the matching vault_gitlab_* keys via `make -C ansible vault-edit`.
+
+komodo_periphery_secrets:
+  # Runner authentication token (glrt-…) created in the GitLab UI
+  # (Admin → CI/CD → Runners). See plan Part D for the one-time register step.
+  GITLAB_RUNNER_TOKEN: "{{ vault_gitlab_runner_token }}"
+
+# The runner uses the Docker executor and bind-mounts the host's
+# /var/run/docker.sock. A Docker upgrade/restart recreates that socket at a new
+# inode, leaving the long-lived container pinned to the old one ("Cannot connect
+# to the Docker daemon"). This drop-in (common_docker role) restarts the runner
+# after dockerd starts so its socket mount re-resolves.
+common_docker_restart_containers_on_start:
+  - gitlab-runner

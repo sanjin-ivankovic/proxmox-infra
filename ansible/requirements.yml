@@ -1,0 +1,20 @@
+---
+# Ansible Galaxy Collections
+# Version pinning strategy: Allow minor/patch updates within major version (e.g., >=5.0.0,<6.0.0)
+# Renovate will automatically create MRs for updates
+
+collections:
+  # General-purpose modules (docker, systemd, git, etc.)
+  - name: community.general
+    version: ">=14.0.0,<14.1.0"
+    source: https://galaxy.ansible.com/api/
+
+  # POSIX-specific modules (mount, authorized_key, sysctl, etc.)
+  - name: ansible.posix
+    version: ">=2.1.0,<3.0.0"
+    source: https://galaxy.ansible.com/api/
+
+  # Docker / docker-compose modules for the Komodo Core host deploy
+  - name: community.docker
+    version: ">=5.2.1,<6.0.0"
+    source: https://galaxy.ansible.com/api/

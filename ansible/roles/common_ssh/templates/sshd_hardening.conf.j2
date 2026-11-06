@@ -1,0 +1,34 @@
+# SSH Hardening Configuration
+# Managed by Ansible - Do not edit manually
+
+# Authentication
+PermitRootLogin {{ common_ssh_permit_root_login }}
+PasswordAuthentication {{ common_ssh_password_authentication }}
+PubkeyAuthentication {{ common_ssh_pubkey_authentication }}
+PermitEmptyPasswords {{ common_ssh_permit_empty_passwords }}
+UsePAM {{ common_ssh_use_pam }}
+
+# Security hardening
+Protocol {{ common_ssh_protocol }}
+MaxAuthTries {{ common_ssh_max_auth_tries }}
+MaxSessions {{ common_ssh_max_sessions }}
+LoginGraceTime {{ common_ssh_login_grace_time }}
+IgnoreRhosts {{ common_ssh_ignore_rhosts }}
+HostbasedAuthentication {{ common_ssh_hostbased_authentication }}
+PermitUserEnvironment {{ common_ssh_permit_user_environment }}
+
+# Session management
+ClientAliveInterval {{ common_ssh_client_alive_interval }}
+ClientAliveCountMax {{ common_ssh_client_alive_count_max }}
+TCPKeepAlive {{ common_ssh_tcp_keep_alive }}
+
+# Forwarding
+X11Forwarding {{ common_ssh_x11_forwarding }}
+
+# Access control
+{% if common_ssh_allow_users | length > 0 %}
+AllowUsers {{ common_ssh_allow_users | join(' ') }}
+{% endif %}
+{% if common_ssh_allow_groups | length > 0 %}
+AllowGroups {{ common_ssh_allow_groups | join(' ') }}
+{% endif %}

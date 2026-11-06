@@ -1,0 +1,32 @@
+---
+# ansible/inventory/host_vars/semaphore.yml
+# Host-local config + Komodo periphery secrets for semaphore.
+# Add the matching vault_semaphore_* keys via `make -C ansible vault-edit`.
+#
+# Source: kubectl get secret proxmox-infra-env-semaphore -n argo-workflows \
+#           -o jsonpath='{.data.ENV_SEMAPHORE}' | base64 -d
+
+# semaphore is an older LXC still on Debian 12 (bookworm). The common_system
+# role defaults to Debian 13+; allow 12 just here so plays run. Upgrade the
+# container's OS to 13 to drop this override.
+common_system_debian_version_min: 12
+
+# Nightly Talos etcd snapshots (configs/semaphore.yml TALOS_ETCD_BACKUP_DIR,
+# mounted from appdata); monitoring_agent reports the newest one's age.
+monitoring_agent_etcd_backup_dir: /srv/docker/appdata/semaphore/data/etcd-backups
+
+komodo_periphery_secrets:
+  SEMAPHORE_ADMIN_PASSWORD: "{{ vault_semaphore_admin_password }}"
+  # SEMAPHORE_ADMIN / _NAME / _EMAIL are non-secret -> komodo/stacks.toml.
+
+  # Credentials for running this repo's playbooks.
+  SEMAPHORE_ANSIBLE_VAULT_PASSWORD: "{{ vault_semaphore_ansible_vault_password }}"
+  SEMAPHORE_PVE_API_URL: "{{ vault_semaphore_pve_api_url }}"
+  SEMAPHORE_PVE_API_TOKEN_ID: "{{ vault_semaphore_pve_api_token_id }}"
+  SEMAPHORE_PVE_API_TOKEN_SECRET: "{{ vault_semaphore_pve_api_token_secret }}"
+
+  # Authentik OIDC client secret for the `semaphore` client. Authentik is the
+  # source of truth (argo-apps kryptos/configs/authentik.yaml,
+  # authentik-oidc-clients SEMAPHORE_CLIENT_SECRET); this is a copy, so a
+  # rotation must update both.
+  SEMAPHORE_OIDC_CLIENT_SECRET: "{{ vault_semaphore_oidc_client_secret }}"

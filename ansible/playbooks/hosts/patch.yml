@@ -1,0 +1,193 @@
+---
+# Patch — wave-sequenced fleet OS patching with HA-pair awareness.
+#
+# Waves are real inventory groups (patch_dns_primaries, patch_services, …) built
+# by the dynamic inventory; a play's `hosts:` resolves before group_vars load,
+# so they cannot be declared in group_vars/all/patching.yml.
+#
+# Every wave play sets any_errors_fatal: true, so a failed task ends the run.
+# An unreachable host only ends its own play, so a localhost check after each
+# wave stops the run before the next wave (for DNS, the HA partner).
+#
+# The role is referenced by bare name, not FQCN: roles_path resolves it from
+# the repo's own roles/, so a runner that clones fresh (Semaphore) needs no
+# built collection.
+#
+#   make -C ansible patch-check                 # whole fleet, --check
+#   make -C ansible patch-hosts WAVE=services   # one wave
+#   make -C ansible patch-hosts WAVE=services ARGS="-e os_patch_reboot_allowed=true"
+
+- name: Patch | Assert the target resolved
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  become: false
+  run_once: true
+  any_errors_fatal: true
+  tasks:
+    # A wave that resolves to nothing makes every later play skip with "no hosts
+    # matched" while ansible still exits 0 — a patch run that reports success
+    # having patched nothing. Usually the dynamic inventory failed upstream.
+    - name: Assert the wave is not empty
+      tags: [always]
+      ansible.builtin.assert:
+        that:
+          - groups[patch_wave | default('patch_all')] | default([]) | length > 0
+        fail_msg: >-
+          Wave '{{ patch_wave | default('patch_all') }}' resolved to zero hosts.
+          The inventory likely failed — check that `terragrunt state pull`
+          succeeds, rather than treating this run as a no-op success.
+        success_msg: >-
+          {{ groups[patch_wave | default('patch_all')] | default([]) | length }}
+          host(s) in '{{ patch_wave | default('patch_all') }}'
+
+- name: Patch | Validate targets
+  hosts: "{{ patch_wave | default('patch_all') }}"
+  gather_facts: false
+  become: false
+  any_errors_fatal: true
+  tasks:
+    - name: Assert the host is not excluded
+      tags: [always]
+      ansible.builtin.assert:
+        that:
+          - inventory_hostname not in os_patch_excluded_hosts
+        fail_msg: >-
+          {{ inventory_hostname }} is excluded from automated patching — it runs
+          the automation and a reboot would kill the task. See the os_patch role
+          README for the manual path.
+        success_msg: "{{ inventory_hostname }} is patchable"
+
+    - name: Assert the host is not Talos
+      tags: [always]
+      ansible.builtin.assert:
+        that:
+          - "'talos_cluster' not in group_names"
+        fail_msg: >-
+          {{ inventory_hostname }} is a Talos node — immutable, patched via
+          talosctl in playbooks/talos/, never apt.
+        success_msg: "{{ inventory_hostname }} is an apt host"
+
+- name: Patch | DNS primaries
+  hosts: "{{ 'patch_dns_primaries' if patch_wave | default('patch_all') in ['patch_all', 'patch_dns_primaries'] else 'patch_skipped' }}"
+  become: true
+  gather_facts: true
+  serial: 2
+  any_errors_fatal: true
+  roles:
+    - role: os_patch
+
+- name: Patch | DNS primaries completed
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  become: false
+  any_errors_fatal: true
+  tasks:
+    - name: Check the dns primaries wave
+      ansible.builtin.include_tasks: tasks/assert-wave-completed.yml
+      vars:
+        patch_wave_check: patch_dns_primaries
+
+- name: Patch | Gate on surviving DNS
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  become: false
+  run_once: true
+  any_errors_fatal: true
+  tasks:
+    - name: Probe each primary by IP
+      ansible.builtin.command: >-
+        dig +short +time=3 +tries=1 @{{ item.ip }} {{ os_patch_dns_probe_name }}
+      register: os_patch_dns_probe
+      changed_when: false
+      # Read-only, so run it even under --check: a skipped command leaves stdout
+      # unset, the until condition never holds, and the gate burns every retry
+      # while DNS is perfectly healthy.
+      check_mode: false
+      # dig prints a timeout on stdout too, so an answer needs rc 0 as well;
+      # checking stdout alone ends the retries on the first timeout.
+      until: os_patch_dns_probe.rc == 0 and os_patch_dns_probe.stdout | trim | length > 0
+      retries: "{{ os_patch_dns_probe_retries }}"
+      delay: "{{ os_patch_dns_probe_delay }}"
+      loop: "{{ os_patch_dns_probes }}"
+      loop_control:
+        label: "{{ item.name }} ({{ item.ip }})"
+      when: patch_wave | default('patch_all') in ['patch_all', 'patch_dns_secondaries']
+
+- name: Patch | DNS secondaries
+  hosts: "{{ 'patch_dns_secondaries' if patch_wave | default('patch_all') in ['patch_all', 'patch_dns_secondaries'] else 'patch_skipped' }}"
+  become: true
+  gather_facts: true
+  serial: 2
+  any_errors_fatal: true
+  roles:
+    - role: os_patch
+
+- name: Patch | DNS secondaries completed
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  become: false
+  any_errors_fatal: true
+  tasks:
+    - name: Check the dns secondaries wave
+      ansible.builtin.include_tasks: tasks/assert-wave-completed.yml
+      vars:
+        patch_wave_check: patch_dns_secondaries
+
+- name: Patch | Services
+  hosts: "{{ 'patch_services' if patch_wave | default('patch_all') in ['patch_all', 'patch_services'] else 'patch_skipped' }}"
+  become: true
+  gather_facts: true
+  serial: 2
+  any_errors_fatal: true
+  roles:
+    - role: os_patch
+
+- name: Patch | Services completed
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  become: false
+  any_errors_fatal: true
+  tasks:
+    - name: Check the services wave
+      ansible.builtin.include_tasks: tasks/assert-wave-completed.yml
+      vars:
+        patch_wave_check: patch_services
+
+- name: Patch | Control plane
+  hosts: "{{ 'patch_control_plane' if patch_wave | default('patch_all') in ['patch_all', 'patch_control_plane'] else 'patch_skipped' }}"
+  become: true
+  gather_facts: true
+  serial: 1
+  any_errors_fatal: true
+  roles:
+    - role: os_patch
+
+- name: Patch | Control plane completed
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  become: false
+  any_errors_fatal: true
+  tasks:
+    - name: Check the control plane wave
+      ansible.builtin.include_tasks: tasks/assert-wave-completed.yml
+      vars:
+        patch_wave_check: patch_control_plane
+
+- name: Patch | Fleet summary
+  hosts: "{{ patch_wave | default('patch_all') }}"
+  gather_facts: false
+  become: false
+  tasks:
+    - name: Print the fleet summary
+      run_once: true
+      ansible.builtin.debug:
+        msg: >-
+          {{ ansible_play_hosts_all
+             | map('extract', hostvars, 'os_patch_report')
+             | select('defined') | list }}

@@ -1,0 +1,57 @@
+---
+# ansible/roles/common_authorized_keys/tasks/main.yml
+
+# `state` is optional per key, and rejectattr on a dict that lacks the attribute
+# raises rather than skipping it — so select on an explicit default instead.
+- name: Resolve keys to authorize
+  tags: [always]
+  ansible.builtin.set_fact:
+    common_authorized_keys_present: >-
+      {{ common_authorized_keys_keys
+         | selectattr('state', 'undefined') | list
+         + (common_authorized_keys_keys | selectattr('state', 'defined')
+            | selectattr('state', 'eq', 'present') | list) }}
+
+# `exclusive` rewrites authorized_keys to contain ONLY the keys passed in this
+# call. With nothing to write that removes every key on the host, including the
+# operator's — and common_ssh has already disabled password auth and root
+# login, so the host becomes reachable only from the Proxmox console. Fail
+# before touching it.
+- name: Assert exclusive mode has keys to write
+  tags: [always]
+  ansible.builtin.assert:
+    that:
+      - common_authorized_keys_present | length > 0
+    fail_msg: >-
+      common_authorized_keys_exclusive is true with no key to authorize; this
+      would remove every authorized key on {{ inventory_hostname }} and lock
+      out all SSH access.
+    success_msg: "exclusive mode has at least one key to write"
+  when: common_authorized_keys_exclusive | bool
+
+# Two paths because `exclusive` is NOT loop-aware: under a loop it applies per
+# iteration, so each key would wipe the one before it and only the last would
+# survive. Exclusive mode therefore passes every key in one newline-joined
+# batch (the form the module documents for this case).
+- name: Authorize keys
+  tags: [keys, ssh, security]
+  ansible.posix.authorized_key:
+    user: "{{ common_authorized_keys_user }}"
+    key: "{{ item.key }}"
+    comment: "{{ item.comment }}"
+    state: "{{ item.state | default('present') }}"
+    manage_dir: true
+  loop: "{{ common_authorized_keys_keys }}"
+  loop_control:
+    label: "{{ item.comment }} ({{ item.state | default('present') }})"
+  when: not common_authorized_keys_exclusive | bool
+
+- name: Authorize keys exclusively
+  tags: [keys, ssh, security]
+  ansible.posix.authorized_key:
+    user: "{{ common_authorized_keys_user }}"
+    key: "{{ common_authorized_keys_present | map(attribute='key') | join('\n') }}"
+    state: present
+    exclusive: true
+    manage_dir: true
+  when: common_authorized_keys_exclusive | bool

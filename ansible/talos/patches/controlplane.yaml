@@ -1,0 +1,102 @@
+---
+# ============================================================================
+# Talos Machine Config Patch - Control Plane
+# ============================================================================
+# This patch is applied only to control plane nodes.
+#
+# Usage: Applied automatically during config generation via
+#        talosctl gen config --config-patch-control-plane @patches/controlplane.yaml
+# ============================================================================
+
+machine:
+  network:
+    interfaces:
+      - interface: ens18
+        vip:
+          ip: "10.140.0.40"
+---
+apiVersion: v1alpha1
+kind: KubeAPIServerConfig
+# KubeAPIServerConfig enables liveness/readiness/startup probes by default.
+# They hit /livez and /readyz unauthenticated, which the anonymous-auth
+# setting in KubeAuthenticationConfig below does not allow; enabling them
+# needs anonymous access scoped to those paths first.
+startupProbes: false
+certExtraSANs:
+  - 10.140.0.40
+  - talos-vip.example.com
+extraArgs:
+  audit-log-path: /var/log/audit/kube/audit.log
+  audit-log-maxage: "30"
+  audit-log-maxbackup: "10"
+  audit-log-maxsize: "100"
+
+  # The first issuer signs new ServiceAccount tokens; every listed issuer
+  # and audience is accepted. The second entry is the endpoint the cluster
+  # had under Omni: pod tokens minted then carry it as both iss and aud,
+  # and kubelet keeps those 1-year tokens for up to 24h before re-minting.
+  # Without both entries the apiserver rejects them as "invalid bearer
+  # token" (401) and long-running controllers (longhorn-manager, traefik,
+  # metallb, argocd) lose API access. Those tokens expire by 2027-10-17;
+  # remove the second entries after that.
+  service-account-issuer:
+    - https://10.140.0.40:6443
+    - https://[fdae:41e4:649b:9303::1]:10000
+  api-audiences:
+    - https://10.140.0.40:6443
+    - https://[fdae:41e4:649b:9303::1]:10000
+---
+# Structured authentication config for the apiserver; Talos writes the file
+# and the apiserver hot-reloads it, so issuer changes need no restart.
+#
+# The issuer URL MUST be the exact `iss` claim string — the apiserver
+# compares it verbatim. Authentik issuers are per application:
+# https://auth.example.com/application/o/<slug>/ (trailing slash included).
+# From the CP nodes it resolves to the Traefik LB and the apiserver fetches
+# JWKS over that path, so OIDC login depends on Traefik/ingress being up.
+# The cert-based kubeconfig (ansible/talos/configs/kubeconfig,
+# system:masters) is the break-glass path and does not depend on any of this.
+#
+# The `oidc:` prefixes namespace OIDC identities and groups so they cannot
+# collide with cert identities, and make RBAC subjects explicit
+# (e.g. group `oidc:admins`).
+apiVersion: v1alpha1
+kind: KubeAuthenticationConfig
+configuration:
+  anonymous:
+    enabled: false
+  jwt:
+    # Authentik (client declared in argo-apps
+    # apps/infra/authentik/blueprints/20-oauth2-providers.yaml).
+    - issuer:
+        url: https://auth.example.com/application/o/headlamp/
+        audiences:
+          - headlamp
+      claimMappings:
+        username:
+          claim: preferred_username
+          prefix: 'oidc:'
+        groups:
+          claim: groups
+          prefix: 'oidc:'
+---
+# kube-controller-manager and kube-scheduler bind to 127.0.0.1 by default, so
+# Prometheus (argo-apps kube-prometheus-stack) cannot reach their secure
+# metrics ports (10257, 10259). Both still require an authorized token.
+apiVersion: v1alpha1
+kind: KubeControllerManagerConfig
+extraArgs:
+  bind-address: 0.0.0.0
+---
+apiVersion: v1alpha1
+kind: KubeSchedulerConfig
+extraArgs:
+  bind-address: 0.0.0.0
+---
+# kube-proxy reads a config file, so its flags have no effect; the metrics
+# address goes in config. Talos only renders the kube-proxy manifest at
+# bootstrap: this reaches the cluster on the next `upgrade-k8s`.
+apiVersion: v1alpha1
+kind: KubeProxyConfig
+config:
+  metricsBindAddress: 0.0.0.0:10249

@@ -1,0 +1,128 @@
+# Shared targets for the Terragrunt units (lxc, talos, unifi). Each unit's
+# Makefile sets its variables and includes this file. Var files come from the
+# unit's terragrunt.hcl extra_arguments, so every recipe is plain terragrunt.
+#
+# The Proxmox units (lxc, talos) also include Makefile.hosts for the import
+# and SSH targets.
+
+TFVARS_SECRET  := terraform.tfvars.secret
+TFVARS_EXAMPLE := terraform.tfvars.secret.example
+BACKUP_DIR     := generated/backups
+NODE           ?= pve
+
+.DEFAULT_GOAL := help
+
+.PHONY: help setup secrets init init-reconfigure plan plan-out apply \
+	apply-target destroy-target validate fmt fmt-check refresh output \
+	state-list state-show state-rm state-mv state-pull backup-state \
+	restore-state taint untaint drift-detect clean
+
+help: ## Show targets
+	@grep -hE '^[a-zA-Z0-9_$$()-]+:.*## ' $(MAKEFILE_LIST) \
+	  | sed -e 's/^$$(IMPORT_TARGET)/$(IMPORT_TARGET)/' -e 's/^$$(REIMPORT_TARGET)/$(REIMPORT_TARGET)/' \
+	  | awk -F':.*## ' '{printf "  %-20s %s\n", $$1, $$2}'
+
+setup: secrets init ## First run: create the secret file from the example, then init
+
+secrets: ## Create terraform.tfvars.secret from the example if it is missing
+	@if [ -f $(TFVARS_SECRET) ]; then echo "$(TFVARS_SECRET) exists"; \
+	elif [ -f $(TFVARS_EXAMPLE) ]; then cp $(TFVARS_EXAMPLE) $(TFVARS_SECRET) && echo "created $(TFVARS_SECRET); fill in the credentials"; \
+	else echo "no $(TFVARS_EXAMPLE) in $(CURDIR)"; exit 1; fi
+
+init: ## terragrunt init (with -upgrade)
+	@terragrunt init -input=false -upgrade
+
+# Needed once per unit after a backend block change in root.hcl; with the
+# bucket and key unchanged, state is not touched.
+init-reconfigure: ## terragrunt init -reconfigure
+	@terragrunt init -input=false -reconfigure
+
+plan: ## Plan against the live infrastructure
+	@terragrunt plan -input=false
+
+plan-out: ## Plan and save it under generated/plans/
+	@mkdir -p generated/plans
+	@terragrunt plan -input=false -out="$(CURDIR)/generated/plans/plan-$$(date +%Y%m%d-%H%M%S).tfplan"
+
+apply: ## Apply (asks for confirmation)
+	@terragrunt apply -input=false
+
+# Non-interactive: echo yes | make apply-target TARGET="'addr1' -target='addr2'"
+apply-target: ## Apply one address: make apply-target TARGET='<addr>'
+	@test -n "$(TARGET)" || { echo "usage: make apply-target TARGET='<addr>'"; exit 1; }
+	@terragrunt apply -input=false -target=$(TARGET)
+
+destroy-target: ## Destroy one address: make destroy-target TARGET='<addr>'
+	@test -n "$(TARGET)" || { echo "usage: make destroy-target TARGET='<addr>'"; exit 1; }
+	@terragrunt destroy -input=false -target=$(TARGET)
+
+validate: ## fmt check + validate
+	@tofu fmt -check -recursive .
+	@terragrunt validate
+
+fmt: ## Format
+	@tofu fmt -recursive .
+
+fmt-check: ## Fail when files are not formatted
+	@tofu fmt -check -recursive -diff .
+
+refresh: ## Refresh state from the live infrastructure
+	@terragrunt refresh -input=false
+
+output: ## Show outputs (OUTPUT=<name> for one, as JSON)
+	@if [ -n "$(OUTPUT)" ]; then terragrunt output -json $(OUTPUT); else terragrunt output; fi
+
+state-list: ## List managed addresses
+	@terragrunt state list
+
+state-show: ## Show one address: make state-show RESOURCE='<addr>'
+	@test -n "$(RESOURCE)" || { echo "usage: make state-show RESOURCE='<addr>'"; exit 1; }
+	@terragrunt state show '$(RESOURCE)'
+
+# RESOURCE=<hostname> removes every address keyed by that hostname. The guest
+# itself is never touched.
+state-rm: backup-state ## Drop from state, keep the guest: make state-rm RESOURCE=<hostname|addr>
+	@test -n "$(RESOURCE)" || { echo "usage: make state-rm RESOURCE=<hostname|addr>"; exit 1; }
+	@if echo '$(RESOURCE)' | grep -qE '^[a-zA-Z0-9_-]+$$'; then \
+	  addrs=$$(terragrunt state list | grep -F '["$(RESOURCE)"]'); \
+	else addrs='$(RESOURCE)'; fi; \
+	test -n "$$addrs" || { echo "nothing in state for $(RESOURCE)"; exit 1; }; \
+	echo "$$addrs"; read -p "Type 'yes' to remove these from state: " c && [ "$$c" = yes ] || exit 1; \
+	echo "$$addrs" | while read -r a; do terragrunt state rm "$$a"; done
+
+state-mv: backup-state ## Rename an address: make state-mv FROM='<addr>' TO='<addr>'
+	@test -n "$(FROM)" -a -n "$(TO)" || { echo "usage: make state-mv FROM='<addr>' TO='<addr>'"; exit 1; }
+	@terragrunt state mv '$(FROM)' '$(TO)'
+
+state-pull: ## Print remote state to stdout
+	@terragrunt state pull
+
+backup-state: ## Save remote state under generated/backups/
+	@mkdir -p $(BACKUP_DIR)
+	@f="$(BACKUP_DIR)/terraform.tfstate.$$(date +%Y%m%d-%H%M%S).backup"; \
+	terragrunt state pull > "$$f" && echo "state backed up to $$f"
+
+restore-state: ## Last resort: push a backup: make restore-state FILE=<backup>
+	@test -n "$(FILE)" || { echo "usage: make restore-state FILE=$(BACKUP_DIR)/<file>"; exit 1; }
+	@read -p "Type 'yes' to overwrite remote state with $(FILE): " c && [ "$$c" = yes ] || exit 1
+	@terragrunt state push '$(FILE)'
+
+taint: ## Force recreation: make taint RESOURCE='<addr>'
+	@test -n "$(RESOURCE)" || { echo "usage: make taint RESOURCE='<addr>'"; exit 1; }
+	@terragrunt taint '$(RESOURCE)'
+
+untaint: ## Undo taint: make untaint RESOURCE='<addr>'
+	@test -n "$(RESOURCE)" || { echo "usage: make untaint RESOURCE='<addr>'"; exit 1; }
+	@terragrunt untaint '$(RESOURCE)'
+
+# The homelab MCP drift tool runs this and reads both the exit code (2) and
+# the "drift detected" text; keep them.
+drift-detect: ## Plan with -detailed-exitcode: 0 clean, 2 drift
+	@terragrunt plan -input=false -detailed-exitcode; rc=$$?; \
+	if [ $$rc -eq 0 ]; then echo "No drift detected"; \
+	elif [ $$rc -eq 2 ]; then echo "Configuration drift detected!"; exit 2; \
+	else exit $$rc; fi
+
+clean: ## Remove local caches and saved plans (never state backups)
+	@find . -type d \( -name .terraform -o -name .terragrunt-cache \) -prune -exec rm -rf {} + 2>/dev/null || true
+	@find generated/plans -name '*.tfplan' -delete 2>/dev/null || true

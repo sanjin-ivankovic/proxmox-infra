@@ -1,0 +1,8 @@
+# Exact allowlist entries for both Pi-hole nodes, each added after a block
+# showed up in the query log. Plain domains only: the script drops anything
+# else.
+graph.facebook.com
+graph.instagram.com
+web.facebook.com
+e.reddit.com
+data.lakehorn.com

@@ -1,0 +1,85 @@
+---
+# ============================================================================
+# Master host-lifecycle orchestrator (playbooks/site.yml)
+# ============================================================================
+# Imports the per-stage host playbooks and groups them with tags so a workflow
+# can be selected at the command line. All hosts are Debian LXCs (and future
+# Linux VMs) configured uniformly; Docker is installed on hosts tagged `docker`.
+#
+# Usage:
+#   ansible-playbook playbooks/site.yml --tags deployment        # bootstrap+configure+verify
+#   ansible-playbook playbooks/site.yml --tags bootstrap --limit <host>
+#   ansible-playbook playbooks/site.yml --tags operations        # diagnostics
+#   ansible-playbook playbooks/site.yml --tags patch             # gated wave patching
+#   ansible-playbook playbooks/site.yml --tags reboot            # (never-gated)
+#   ansible-playbook playbooks/site.yml --list-tags
+#
+# Tag groups:
+#   deployment  - bootstrap, configure, authorized-keys, monitoring, verify
+#   operations  - diagnostics; patch (also `never`: requires --tags patch)
+#   lifecycle   - restart-docker, reboot, shutdown
+#   reboot + shutdown are also `never` (require the explicit tag).
+# ============================================================================
+
+- name: Import bootstrap playbook
+  ansible.builtin.import_playbook: hosts/bootstrap.yml
+  tags:
+    - bootstrap
+    - deployment
+
+- name: Import configure playbook
+  ansible.builtin.import_playbook: hosts/configure.yml
+  tags:
+    - configure
+    - deployment
+
+- name: Import authorized-keys playbook
+  ansible.builtin.import_playbook: hosts/authorized-keys.yml
+  tags:
+    - authorized-keys
+    - deployment
+
+- name: Import monitoring-agent playbook
+  ansible.builtin.import_playbook: hosts/monitoring-agent.yml
+  tags:
+    - monitoring
+    - deployment
+
+- name: Import verify playbook
+  ansible.builtin.import_playbook: hosts/verify.yml
+  tags:
+    - verify
+    - deployment
+
+- name: Import diagnostics playbook
+  ansible.builtin.import_playbook: hosts/diagnostics.yml
+  tags:
+    - diagnostics
+    - operations
+
+- name: Import patch playbook
+  ansible.builtin.import_playbook: hosts/patch.yml
+  tags:
+    - patch
+    - operations
+    - never
+
+- name: Import restart-docker playbook
+  ansible.builtin.import_playbook: hosts/restart-docker.yml
+  tags:
+    - restart-docker
+    - lifecycle
+
+- name: Import reboot playbook
+  ansible.builtin.import_playbook: hosts/reboot.yml
+  tags:
+    - reboot
+    - lifecycle
+    - never
+
+- name: Import shutdown playbook
+  ansible.builtin.import_playbook: hosts/shutdown.yml
+  tags:
+    - shutdown
+    - lifecycle
+    - never

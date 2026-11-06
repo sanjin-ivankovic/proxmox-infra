@@ -1,0 +1,30 @@
+---
+# ansible/roles/komodo_core/meta/main.yml
+
+galaxy_info:
+  role_name: komodo_core
+  author: Maintainer Name
+  description: Deploy Komodo Core (UI/API) + FerretDB v2 via docker-compose
+  license: MIT
+  min_ansible_version: '2.9'
+  platforms:
+    - name: Debian
+      versions:
+        - 'trixie'
+    - name: Ubuntu
+      versions:
+        - 'noble'
+  galaxy_tags:
+    - komodo
+    - docker
+    - deployment
+
+# Core runs as a docker-compose stack, so Docker + the compose plugin are needed.
+dependencies:
+  - role: common_docker
+
+# community.docker.docker_compose_v2 is used to bring up the Core stack.
+collections:
+  - community.docker
+
+allow_duplicates: false
