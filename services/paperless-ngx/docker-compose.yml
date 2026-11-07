@@ -1,0 +1,72 @@
+---
+# Paperless-NGX Document Management System
+# Open-source document management system for digitizing and organizing documents
+#
+# Deployment: Auto-deployed via Komodo on push to main
+# Web UI: http://<host-ip>:8080
+
+services:
+  broker:
+    image: docker.io/library/redis:8.10.3@sha256:0c257ce8b2f31f9f7595f587edf8ac259a248ba3ced82badc8c7aa826a85224f
+    restart: unless-stopped
+    volumes:
+      - ${APPDATA_DIR}/redis/data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+  db:
+    image: docker.io/library/postgres:18.6@sha256:edb0c08dc33befd0262ab3b5cf1c4f3f8cfd8b09e88c05b45adee29d6761ddb6
+    restart: unless-stopped
+    volumes:
+      - ${APPDATA_DIR}/postgres/data:/var/lib/postgresql
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+  webserver:
+    image: ghcr.io/paperless-ngx/paperless-ngx:3.4.2@sha256:d704e84f88300eb6ab001ab15720a2330ff99169cf9f94d6b8fcc44b63a84c84
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+      broker:
+        condition: service_healthy
+    ports:
+      - '8080:8000'
+    volumes:
+      - ${APPDATA_DIR}/paperless-ngx/data:/usr/src/paperless/data
+      - ${APPDATA_DIR}/paperless-ngx/media:/usr/src/paperless/media
+      - ${APPDATA_DIR}/paperless-ngx/export:/usr/src/paperless/export
+      - ${APPDATA_DIR}/paperless-ngx/consume:/usr/src/paperless/consume
+    environment:
+      USERMAP_UID: ${USERMAP_UID}
+      USERMAP_GID: ${USERMAP_GID}
+      PAPERLESS_REDIS: redis://broker:6379
+      PAPERLESS_DBHOST: db
+      PAPERLESS_DBENGINE: postgresql
+      PAPERLESS_DBNAME: ${POSTGRES_DB}
+      PAPERLESS_DBUSER: ${POSTGRES_USER}
+      PAPERLESS_DBPASS: ${POSTGRES_PASSWORD}
+      PAPERLESS_URL: ${PAPERLESS_URL}
+      PAPERLESS_SECRET_KEY: ${PAPERLESS_SECRET_KEY}
+      PAPERLESS_TIME_ZONE: ${PAPERLESS_TIME_ZONE}
+      PAPERLESS_OCR_LANGUAGE: ${PAPERLESS_OCR_LANGUAGE}
+      PAPERLESS_OCR_LANGUAGES: ${PAPERLESS_OCR_LANGUAGES}
+      PAPERLESS_ADMIN_USER: ${PAPERLESS_ADMIN_USER}
+      PAPERLESS_ADMIN_MAIL: ${PAPERLESS_ADMIN_MAIL}
+      PAPERLESS_ADMIN_PASSWORD: ${PAPERLESS_ADMIN_PASSWORD}
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s

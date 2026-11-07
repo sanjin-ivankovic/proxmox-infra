@@ -1,0 +1,33 @@
+# Import and SSH targets for the Proxmox units (lxc, talos). Include after
+# Makefile.common. The unit sets:
+#   HOST_RESOURCE   state address prefix keyed by hostname
+#   IMPORT_TYPE     import_proxmox.py --type (lxc | vm)
+#   IMPORT_TARGET   name of the import target (import-lxc | import-vm)
+#   REIMPORT_TARGET name of the re-key target (reimport-lxc | reimport-vm)
+
+.PHONY: ssh-commands import-from-proxmox $(IMPORT_TARGET) $(REIMPORT_TARGET)
+
+ssh-commands: ## Print the SSH command for every host
+	@terragrunt output -json ssh_commands | jq -r '.[]'
+
+import-from-proxmox: ## Write tfvars for an existing guest: VMID=<n> [NODE=pve]
+	@test -n "$(VMID)" || { echo "usage: make import-from-proxmox VMID=<n> [NODE=pve]"; exit 1; }
+	@test -f $(TFVARS_SECRET) || { echo "$(TFVARS_SECRET) missing: make secrets"; exit 1; }
+	@python3 ../scripts/import_proxmox.py --vmid $(VMID) --type $(IMPORT_TYPE) --node $(NODE) \
+	  --api-url "$$(grep proxmox_api_url $(TFVARS_SECRET) | cut -d'"' -f2)" \
+	  --api-token-id "$$(grep proxmox_api_token_id $(TFVARS_SECRET) | cut -d'"' -f2)" \
+	  --api-token-secret "$$(grep proxmox_api_token_secret $(TFVARS_SECRET) | cut -d'"' -f2)" \
+	  && echo "review instances/, then: make $(IMPORT_TARGET) HOSTNAME=<name> VMID=$(VMID)"
+
+$(IMPORT_TARGET): ## Import a guest into state: HOSTNAME=<h> VMID=<n> [NODE=pve]
+	@test -n "$(HOSTNAME)" -a -n "$(VMID)" || { echo "usage: make $@ HOSTNAME=<h> VMID=<n> [NODE=pve]"; exit 1; }
+	@terragrunt import -input=false '$(HOST_RESOURCE)["$(HOSTNAME)"]' "$(NODE)/$(VMID)"
+	@echo "imported $(HOSTNAME); run make plan to check the import"
+
+# Use when a plan wants to replace a guest because the stored vm_id drifted.
+# VMID is the LIVE id; the guest is never touched, only its state entry.
+$(REIMPORT_TARGET): backup-state ## Re-key a drifted guest in state: HOSTNAME=<h> VMID=<live id>
+	@test -n "$(HOSTNAME)" -a -n "$(VMID)" || { echo "usage: make $@ HOSTNAME=<h> VMID=<live id> [NODE=pve]"; exit 1; }
+	@terragrunt state rm '$(HOST_RESOURCE)["$(HOSTNAME)"]' || true
+	@terragrunt import -input=false '$(HOST_RESOURCE)["$(HOSTNAME)"]' "$(NODE)/$(VMID)"
+	@echo "$(HOSTNAME) re-keyed to $(NODE)/$(VMID); run make plan: expect 0 to destroy"

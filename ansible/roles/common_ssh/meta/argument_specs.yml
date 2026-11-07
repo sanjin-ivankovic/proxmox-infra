@@ -1,0 +1,152 @@
+---
+# Argument specification for the common_ssh role.
+# Validated at the start of role execution; defaults here MUST match
+# defaults/main.yml. sshd directive values are kept as strings ("yes"/"no")
+# because they are written verbatim into sshd_config — they are not booleans.
+argument_specs:
+  main:
+    short_description: SSH hardening for Debian/Ubuntu hosts
+    description:
+      - Hardens the OpenSSH daemon by writing a managed block into
+        C(sshd_config) (root login off, key-only auth, sane session limits),
+        validating with C(sshd -t), and restarting the service.
+    author:
+      - Maintainer Name
+    options:
+      common_ssh_sshd_config_path:
+        type: str
+        required: false
+        default: /etc/ssh/sshd_config
+        description: Absolute path to the sshd configuration file to manage.
+      common_ssh_service_name:
+        type: str
+        required: false
+        default: ssh
+        description: Name of the SSH systemd service to restart on change.
+
+      common_ssh_permit_root_login:
+        type: str
+        required: false
+        default: "no"
+        choices: ["yes", "no", "prohibit-password", "forced-commands-only"]
+        description: Value for the C(PermitRootLogin) sshd directive.
+      common_ssh_password_authentication:
+        type: str
+        required: false
+        default: "no"
+        choices: ["yes", "no"]
+        description: Value for the C(PasswordAuthentication) sshd directive.
+      common_ssh_pubkey_authentication:
+        type: str
+        required: false
+        default: "yes"
+        choices: ["yes", "no"]
+        description: Value for the C(PubkeyAuthentication) sshd directive.
+      common_ssh_use_pam:
+        type: str
+        required: false
+        default: "yes"
+        choices: ["yes", "no"]
+        description: Value for the C(UsePAM) sshd directive.
+
+      common_ssh_max_auth_tries:
+        type: int
+        required: false
+        default: 3
+        description: Value for the C(MaxAuthTries) sshd directive.
+      common_ssh_max_sessions:
+        type: int
+        required: false
+        default: 10
+        description: Value for the C(MaxSessions) sshd directive.
+      common_ssh_login_grace_time:
+        type: int
+        required: false
+        default: 30
+        description: Value (seconds) for the C(LoginGraceTime) sshd directive.
+      common_ssh_permit_empty_passwords:
+        type: str
+        required: false
+        default: "no"
+        choices: ["yes", "no"]
+        description: Value for the C(PermitEmptyPasswords) sshd directive.
+
+      common_ssh_client_alive_interval:
+        type: int
+        required: false
+        default: 300
+        description: Value (seconds) for the C(ClientAliveInterval) sshd directive.
+      common_ssh_client_alive_count_max:
+        type: int
+        required: false
+        default: 3
+        description: Value for the C(ClientAliveCountMax) sshd directive.
+      common_ssh_tcp_keep_alive:
+        type: str
+        required: false
+        default: "yes"
+        choices: ["yes", "no"]
+        description: Value for the C(TCPKeepAlive) sshd directive.
+
+      common_ssh_x11_forwarding:
+        type: str
+        required: false
+        default: "no"
+        choices: ["yes", "no"]
+        description: Value for the C(X11Forwarding) sshd directive.
+      common_ssh_protocol:
+        type: int
+        required: false
+        default: 2
+        description: Value for the C(Protocol) sshd directive.
+      common_ssh_ignore_rhosts:
+        type: str
+        required: false
+        default: "yes"
+        choices: ["yes", "no"]
+        description: Value for the C(IgnoreRhosts) sshd directive.
+      common_ssh_hostbased_authentication:
+        type: str
+        required: false
+        default: "no"
+        choices: ["yes", "no"]
+        description: Value for the C(HostbasedAuthentication) sshd directive.
+      common_ssh_permit_user_environment:
+        type: str
+        required: false
+        default: "no"
+        choices: ["yes", "no"]
+        description: Value for the C(PermitUserEnvironment) sshd directive.
+
+      common_ssh_allow_users:
+        type: list
+        elements: str
+        required: false
+        default: []
+        description:
+          - Users permitted to log in via SSH (C(AllowUsers)). Empty means no
+            C(AllowUsers) line is written (all users allowed).
+      common_ssh_allow_groups:
+        type: list
+        elements: str
+        required: false
+        default: []
+        description:
+          - Groups permitted to log in via SSH (C(AllowGroups)). Empty means no
+            C(AllowGroups) line is written (all groups allowed).
+
+      common_ssh_restart_service:
+        type: bool
+        required: false
+        default: true
+        description: Whether to restart the SSH service when the config changes.
+      common_ssh_validate_config:
+        type: bool
+        required: false
+        default: true
+        description: Whether to validate the rendered config with C(sshd -t).
+      common_ssh_backup_config:
+        type: bool
+        required: false
+        default: true
+        description: Whether to back up C(sshd_config) before modifying it.

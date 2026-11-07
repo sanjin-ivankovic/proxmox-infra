@@ -1,0 +1,31 @@
+---
+# ============================================================================
+# Talos — LIFECYCLE orchestrator
+# ============================================================================
+# VM power lifecycle: reboot, shutdown, startup, and the (never-gated)
+# destructive cluster reset.
+#
+#   ansible-playbook -i inventory/talos/hosts.yml playbooks/talos/lifecycle.yml --tags startup
+#   ansible-playbook -i inventory/talos/hosts.yml playbooks/talos/lifecycle.yml --tags reboot
+#   ansible-playbook -i inventory/talos/hosts.yml playbooks/talos/lifecycle.yml --tags shutdown
+#   ansible-playbook -i inventory/talos/hosts.yml playbooks/talos/lifecycle.yml --tags reset
+#
+# reboot / shutdown / reset are `never`-gated (require the explicit tag);
+# reset is DESTRUCTIVE (returns nodes to maintenance mode).
+# ============================================================================
+
+- name: Import 09-reboot
+  ansible.builtin.import_playbook: 09-reboot.yml
+  tags: [reboot, operations, lifecycle, never]
+
+- name: Import 10-shutdown
+  ansible.builtin.import_playbook: 10-shutdown.yml
+  tags: [shutdown, lifecycle, never]
+
+- name: Import 11-startup
+  ansible.builtin.import_playbook: 11-startup.yml
+  tags: [startup, lifecycle]
+
+- name: Import 13-reset
+  ansible.builtin.import_playbook: 13-reset.yml
+  tags: [reset, lifecycle, never]

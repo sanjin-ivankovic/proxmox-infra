@@ -1,0 +1,24 @@
+## {{ ansible_managed }}
+[Unit]
+Description=Prometheus node_exporter
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=node_exporter
+Group=node_exporter
+ExecStart=/usr/local/bin/node_exporter \
+  --web.listen-address=:{{ monitoring_agent_node_exporter_port }} \
+  --collector.textfile.directory={{ monitoring_agent_textfile_dir }} \
+  --collector.systemd \
+  --collector.systemd.unit-include=(docker|containerd|periphery|node_exporter|cadvisor|etcd-backup-age)[.](service|timer)
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

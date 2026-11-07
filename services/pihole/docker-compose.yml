@@ -1,0 +1,81 @@
+---
+# Pi-hole DNS Server (pihole-1 / pihole-2)
+# Network-wide ad blocking and DNS server, one compose for both nodes.
+#
+# Deployment: Komodo stacks pihole-1 and pihole-2 (komodo/stacks.toml), both
+# with project_name "pihole". NODE (1 or 2) and CRONTAB_STRING come from the
+# stack environment.
+# Web UI: https://pihole<N>.example.com/admin
+# DNS Port: 53 (TCP/UDP)
+
+services:
+  # Pi-hole v6 with pihole-updatelists (docker/pihole). Every setting set here
+  # through FTLCONF_* is read-only in the web UI.
+  pihole:
+    container_name: pihole-${NODE:?NODE is required}
+    hostname: pihole-${NODE:?NODE is required}
+    image: ${REGISTRY_IMAGE}/pihole:2026.10.1
+    network_mode: host
+    depends_on:
+      unbound:
+        condition: service_healthy
+    environment:
+      TZ: ${TZ}
+      FTLCONF_webserver_api_password: ${WEB_PASSWORD}
+      # Traefik (via the Talos nodes), ADMIN and WireGuard.
+      FTLCONF_webserver_acl: "+127.0.0.1,+10.140.0.0/24,+10.120.0.0/24,+10.106.0.0/24"
+      FTLCONF_webserver_domain: pihole${NODE:?NODE is required}.example.com
+      FTLCONF_dns_upstreams: "127.0.0.1#5335"
+      # example.com and every private PTR go to Technitium. It allows recursion
+      # for the resolver IPs only so its answers carry RA, and it answers
+      # private reverse zones it does not host NXDOMAIN (locally served zones).
+      # dns.domain.name is left at its default "lan": set to example.com it adds
+      # local=/example.com/ and the zone would never be forwarded.
+      FTLCONF_dns_revServers: "true,10.0.0.0/8,10.110.0.10,example.com;true,10.0.0.0/8,10.110.0.11,example.com"
+      # Clients come from every VLAN; LOCAL answers only the host's own subnet.
+      FTLCONF_dns_listeningMode: ALL
+      FTLCONF_dns_domainNeeded: "true"
+      FTLCONF_dns_bogusPriv: "true"
+      # Unbound validates; validating again here only adds latency.
+      FTLCONF_dns_dnssec: "false"
+      # The default 1000/60s throttles pve and the Talos nodes (2-3 qps each).
+      FTLCONF_dns_rateLimit_count: "5000"
+      FTLCONF_dns_rateLimit_interval: "60"
+      # ~60 MB of query log per day at the primary's load; the disk is 8 GiB.
+      FTLCONF_database_maxDBdays: "30"
+      # FTL's NTP server and clock sync are on by default; an unprivileged LXC
+      # cannot set the clock and nothing should use this host for NTP.
+      FTLCONF_ntp_ipv4_active: "false"
+      FTLCONF_ntp_ipv6_active: "false"
+      FTLCONF_ntp_sync_active: "false"
+      FTLCONF_misc_check_load: "false"
+      # FTL renices itself to -10 by default, which fails in an unprivileged LXC.
+      # -999 disables renicing; SYS_NICE stays in cap_add because FTL warns when
+      # the capability is missing even then.
+      FTLCONF_misc_nice: "-999"
+      # pihole-updatelists reads its config and lists from the repo checkout.
+      # On a restart (GitOps Apply restarts the service when a list file
+      # changes) it also runs once FTL is up, not only at the cron time. The
+      # nodes use different cron minutes so they never rebuild gravity together.
+      CRONTAB_STRING: ${CRONTAB_STRING:?CRONTAB_STRING is required}
+      UPDATELISTS_ON_START: "true"
+    volumes:
+      - ${APPDATA_DIR}/pihole-${NODE:?NODE is required}/etc-pihole:/etc/pihole
+      - ./pihole-updatelists.conf:/etc/pihole-updatelists/pihole-updatelists.conf:ro
+      - ./lists:/lists:ro
+    cap_add:
+      - CHOWN
+      - SYS_NICE
+    restart: unless-stopped
+
+  # Unbound - DNS-over-TLS forwarder to Quad9 with DNSSEC validation
+  unbound:
+    image: ${REGISTRY_IMAGE}/unbound:1.26.2
+    container_name: unbound-${NODE:?NODE is required}
+    network_mode: host
+    environment:
+      TZ: ${TZ}
+    volumes:
+      - ../../docker/unbound/data/opt/unbound/etc/unbound/unbound.conf:/opt/unbound/etc/unbound/unbound.conf:ro
+      - ../../docker/unbound/data/opt/unbound/etc/unbound/forward-records.conf:/opt/unbound/etc/unbound/forward-records.conf:ro
+    restart: unless-stopped

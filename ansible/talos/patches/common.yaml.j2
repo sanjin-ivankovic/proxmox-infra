@@ -1,0 +1,97 @@
+---
+# ============================================================================
+# Talos Machine Config Patch - Common (Applied to All Nodes)
+# ============================================================================
+# This patch is applied to both control plane and worker nodes.
+#
+# Usage: Applied automatically during config generation via
+#        talosctl gen config --config-patch @patches/common.yaml
+# ============================================================================
+
+# Machine logs to the node-local Alloy (argo-apps apps/infra/alloy,
+# release alloy-talos: a hostNetwork DaemonSet listening on 127.0.0.1).
+# Every node sends to itself, so the receiver knows the node by its own name
+# and no cross-node or load-balancer path is involved. Talos keeps these
+# logs in memory only; without this they are lost on reboot.
+machine:
+  logging:
+    destinations:
+      - endpoint: tcp://127.0.0.1:6050/
+        format: json_lines
+---
+# Kernel log (dmesg) to the same receiver, second port.
+apiVersion: v1alpha1
+kind: KmsgLogConfig
+name: alloy-talos
+url: tcp://127.0.0.1:6051
+---
+# Install configuration. wipe defaults to true in this document.
+apiVersion: v1alpha1
+kind: UnattendedInstallConfig
+installer:
+  image: {{ talos_installer_image }}
+provisioning:
+  diskSelector:
+    match: disk.dev_path == "{{ talos_install_disk }}"
+  wipe: false
+---
+# Required for Longhorn distributed storage
+apiVersion: v1alpha1
+kind: KernelModuleConfig
+name: iscsi_tcp
+---
+apiVersion: v1alpha1
+kind: KernelModuleConfig
+name: nvme_tcp
+---
+apiVersion: v1alpha1
+kind: SysctlConfig
+params:
+  # Increase inotify limits for large clusters
+  fs.inotify.max_user_watches: "1048576"
+  fs.inotify.max_user_instances: "8192"
+---
+apiVersion: v1alpha1
+kind: TimeSyncConfig
+ntp:
+  servers:
+{% for server in talos_time_servers %}
+    - {{ server }}
+{% endfor %}
+---
+apiVersion: v1alpha1
+kind: ResolverConfig
+nameservers:
+{% for nameserver in talos_nameservers %}
+  - address: {{ nameserver }}
+{% endfor %}
+hostDNS:
+  enabled: true
+  forwardKubeDNSToHost: true
+---
+apiVersion: v1alpha1
+kind: RegistryAuthConfig
+name: registry-1.docker.io
+username: {{ dockerhub_username }}
+password: {{ dockerhub_password }}
+---
+# Defaults that `talosctl gen config` adds for new clusters and that an
+# upgraded cluster does not have. Removed so generated configs keep the
+# running behaviour; enable each deliberately in its own change.
+#
+# Workload isolation runs kubelet and pods in a sandbox namespace. The
+# in-tree iSCSI plugin cannot reach the host iscsid from there; Longhorn's
+# instance-managers also drive host iSCSI and need testing on one worker
+# before this is enabled.
+apiVersion: v1alpha1
+kind: SecurityProfileConfig
+$patch: delete
+---
+apiVersion: v1alpha1
+kind: FilesystemTrimConfig
+$patch: delete
+---
+apiVersion: v1alpha1
+kind: VolumeConfig
+name: EPHEMERAL
+$patch: delete

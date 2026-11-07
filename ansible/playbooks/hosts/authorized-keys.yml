@@ -1,0 +1,18 @@
+---
+# Authorized keys — authorize the shared automation key on targeted hosts.
+
+- name: Manage Authorized Keys
+  hosts: "{{ target | default('all') }}"
+  become: true
+  gather_facts: false
+  remote_user: maintainer
+  vars:
+    ansible_user: maintainer
+  tags: [authorized-keys]
+
+  roles:
+    - role: common_authorized_keys
+      vars:
+        common_authorized_keys_keys:
+          - comment: semaphore-automation
+            key: "{{ semaphore_automation_public_key }}"

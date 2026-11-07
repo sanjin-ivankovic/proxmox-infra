@@ -1,0 +1,28 @@
+---
+# ansible/roles/os_patch/meta/main.yml
+
+galaxy_info:
+  role_name: os_patch
+  author: Maintainer Name
+  description: Gated OS patching for a single host — preflight, apt, reboot, verify, report
+  license: MIT
+  min_ansible_version: '2.9'
+  platforms:
+    - name: Debian
+      versions:
+        - 'trixie'
+    - name: Ubuntu
+      versions:
+        - 'noble'
+  galaxy_tags:
+    - patching
+    - apt
+    - maintenance
+    - debian
+    - ubuntu
+
+# Deliberately empty: patching must not drag in common_system's package installs
+# and OS asserts. The wave orchestrator supplies the ordering this role lacks.
+dependencies: []
+
+allow_duplicates: false

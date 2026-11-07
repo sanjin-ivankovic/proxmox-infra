@@ -1,0 +1,46 @@
+---
+# Monitoring agent — node_exporter and cAdvisor on every Docker host, scraped
+# by Prometheus in the cluster (argo-apps apps/infra/kube-prometheus-stack),
+# and Alloy shipping the journal and container logs to Loki.
+# `target` scopes the play as in configure.yml; --limit still intersects.
+
+- name: Monitoring agent
+  hosts: "{{ target | default('all') }}:&docker"
+  become: true
+  gather_facts: true
+  remote_user: maintainer  # root login disabled after bootstrap
+  tags: [monitoring]
+
+  roles:
+    - role: monitoring_agent
+
+  post_tasks:
+    - name: Check node_exporter answers locally
+      ansible.builtin.uri:
+        url: http://127.0.0.1:{{ monitoring_agent_node_exporter_port }}/metrics
+        return_content: false
+      register: monitoring_agent_ne_check
+      retries: 5
+      delay: 2
+      until: monitoring_agent_ne_check.status == 200
+      when: not ansible_check_mode
+
+    - name: Check Alloy is ready
+      ansible.builtin.uri:
+        url: http://127.0.0.1:{{ monitoring_agent_alloy_port }}/-/ready
+        return_content: false
+      register: monitoring_agent_al_check
+      retries: 10
+      delay: 3
+      until: monitoring_agent_al_check.status == 200
+      when: not ansible_check_mode
+
+    - name: Check cAdvisor answers locally
+      ansible.builtin.uri:
+        url: http://127.0.0.1:{{ monitoring_agent_cadvisor_port }}/metrics
+        return_content: false
+      register: monitoring_agent_ca_check
+      retries: 10
+      delay: 3
+      until: monitoring_agent_ca_check.status == 200
+      when: not ansible_check_mode

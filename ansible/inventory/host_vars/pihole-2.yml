@@ -1,0 +1,8 @@
+---
+# ansible/inventory/host_vars/pihole-2.yml
+# Host-local Komodo periphery secret for pihole-2 (web UI admin password).
+# Add vault_pihole_web_password via `make -C ansible vault-edit`.
+# Shared across the pihole HA pair (same password on -1 and -2).
+
+komodo_periphery_secrets:
+  WEB_PASSWORD: "{{ vault_pihole_web_password }}"

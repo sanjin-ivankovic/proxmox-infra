@@ -1,0 +1,42 @@
+---
+# ============================================================================
+# Talos Cluster Role - Check talosctl Installation
+# ============================================================================
+# Validates that talosctl is installed and displays version.
+#
+# Usage:
+#   - ansible.builtin.include_role:
+#       name: talos_cluster
+#       tasks_from: check_talosctl
+# ============================================================================
+
+- name: Check if talosctl is installed
+  ansible.builtin.command: which talosctl
+  register: talos_cluster_talosctl_check
+  changed_when: false
+  failed_when: false
+  delegate_to: localhost
+  run_once: true
+
+- name: Fail if talosctl not found
+  ansible.builtin.fail:
+    msg: |
+      talosctl not found. Please install it:
+        brew install siderolabs/tap/talosctl
+      Or:
+        curl -sL https://talos.dev/install | sh
+  when: talos_cluster_talosctl_check.rc != 0
+  delegate_to: localhost
+  run_once: true
+
+- name: Display talosctl version
+  ansible.builtin.command: talosctl version --client --short
+  register: talos_cluster_talosctl_version
+  changed_when: false
+  delegate_to: localhost
+  run_once: true
+
+- name: Show talosctl version
+  ansible.builtin.debug:
+    msg: "Using {{ talos_cluster_talosctl_version.stdout }}"
+  run_once: true

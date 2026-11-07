@@ -1,0 +1,82 @@
+---
+# Semaphore CI/CD Service
+# Ansible-driven continuous deployment and infrastructure automation
+#
+# Deployment: Komodo GitOps Apply on push to main
+# URL: https://semaphore.example.com (Traefik in the cluster -> host port 3000)
+# Login: Authentik OIDC; the local admin comes from SEMAPHORE_ADMIN*
+
+name: semaphore
+
+services:
+  semaphore:
+    container_name: semaphore
+    image: ${REGISTRY_IMAGE}/semaphore:2.19.17
+    ports:
+      - 3000:3000
+    environment:
+      SEMAPHORE_DB_DIALECT: sqlite
+      # Schedules (configs/semaphore.yml) run on this clock; the default is UTC.
+      SEMAPHORE_SCHEDULE_TIMEZONE: ${TZ}
+      SEMAPHORE_ADMIN: ${SEMAPHORE_ADMIN}
+      SEMAPHORE_ADMIN_PASSWORD: ${SEMAPHORE_ADMIN_PASSWORD}
+      SEMAPHORE_ADMIN_NAME: ${SEMAPHORE_ADMIN_NAME}
+      SEMAPHORE_ADMIN_EMAIL: ${SEMAPHORE_ADMIN_EMAIL}
+      ANSIBLE_VAULT_PASSWORD: ${SEMAPHORE_ANSIBLE_VAULT_PASSWORD}
+      # Must be the full user@realm!tokenname form — variables.tf validates it.
+      TF_VAR_proxmox_api_url: ${SEMAPHORE_PVE_API_URL}
+      TF_VAR_proxmox_api_token_id: ${SEMAPHORE_PVE_API_TOKEN_ID}
+      TF_VAR_proxmox_api_token_secret: ${SEMAPHORE_PVE_API_TOKEN_SECRET}
+      TF_IN_AUTOMATION: '1'
+      # Public URL; OIDC redirects and notification links are built from it.
+      SEMAPHORE_WEB_ROOT: https://semaphore.example.com
+      # The provider key `authentik` is the path segment in redirect_url and
+      # must match the strict redirect URI of the Authentik `semaphore` client
+      # (argo-apps apps/infra/authentik/blueprints/20-oauth2-providers.yaml).
+      # Users are matched by email; an email owned by a local account is
+      # rejected. return_via_state keeps redirect_url constant for strict
+      # matching.
+      SEMAPHORE_OIDC_PROVIDERS: >-
+        {"authentik": {"display_name": "Sign in with Authentik",
+        "provider_url": "https://auth.example.com/application/o/semaphore-ui/",
+        "client_id": "semaphore",
+        "client_secret": "${SEMAPHORE_OIDC_CLIENT_SECRET}",
+        "redirect_url": "https://semaphore.example.com/api/auth/oidc/authentik/redirect/",
+        "scopes": ["openid", "profile", "email"],
+        "username_claim": "preferred_username", "name_claim": "name",
+        "email_claim": "email", "return_via_state": true}}
+      # Hides the password form so users sign in through Authentik. 2.19 only
+      # hides it: POST /api/auth/login still accepts the local admin's
+      # password (vault_semaphore_admin_password) until 2.20, which rejects
+      # password logins server-side. That admin is the break-glass; reset it
+      # with `docker exec semaphore semaphore user change-by-login`.
+      SEMAPHORE_PASSWORD_LOGIN_DISABLED: 'true'
+    volumes:
+      - ${APPDATA_DIR}/semaphore/data:/var/lib/semaphore
+      # Host keys for strict checking; make -C ansible ssh-known-hosts.
+      - ./known_hosts:/opt/semaphore/known_hosts:ro
+      - ${APPDATA_DIR}/semaphore/config:/etc/semaphore
+    networks:
+      - semaphore_network
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'wget',
+          '--quiet',
+          '--tries=1',
+          '--spider',
+          'http://localhost:3000/api/ping',
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+networks:
+  semaphore_network:
+    name: semaphore_network
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16

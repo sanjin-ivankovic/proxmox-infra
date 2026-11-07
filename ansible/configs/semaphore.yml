@@ -1,0 +1,205 @@
+---
+# ansible/configs/semaphore.yml
+# Desired state for the Semaphore project, applied by
+# `make -C ansible semaphore-bootstrap`.
+#
+# Template names are `<scope>: <action>`, so the alphabetical list groups by
+# what a template acts on (Hosts, Pi-hole, Talos). Rename with previous_name
+# (see scripts/semaphore_bootstrap.py), never by editing the name alone: that
+# deletes the template and its task history.
+
+project:
+  name: proxmox-infra
+  alert: false
+
+# Private keys are NOT stored here — create both in the UI and the script
+# resolves them by name. Two entries share the same key material because
+# Semaphore takes the SSH user from the key's login: GitLab only accepts `git`,
+# while the managed hosts are reached as `maintainer`.
+keys:
+  - name: semaphore-automation      # host access
+    type: ssh
+    login: maintainer
+  - name: semaphore-git             # repository clone
+    type: ssh
+    login: git
+
+repositories:
+  - name: proxmox-infra
+    git_url: git@source.example.com:example-org/proxmox-infra.git
+    git_branch: main
+    ssh_key: semaphore-git
+
+inventories:
+  # type: file — Semaphore passes the path to `ansible-playbook -i`, and ansible
+  # auto-detects the executable script inventory.
+  - name: hosts
+    type: file
+    inventory: ansible/inventory/terraform_state_inventory.py
+    ssh_key: semaphore-automation
+  # The Talos nodes are reached through talosctl, never SSH; Semaphore still
+  # requires a key on every inventory.
+  - name: talos
+    type: file
+    inventory: ansible/inventory/talos/hosts.yml
+    ssh_key: semaphore-automation
+
+environments:
+  # ANSIBLE_CONFIG is load-bearing: without it ansible finds no config and
+  # collections_path, host_key_checking and pipelining silently revert.
+  - name: hosts
+    env:
+      ANSIBLE_CONFIG: ./ansible/ansible.cfg
+      ANSIBLE_SHARED_SSH_KEY: /home/semaphore/.ssh/semaphore-automation
+      ANSIBLE_VAULT_PASSWORD_FILE: /home/semaphore/.vault_pass
+      # Hosts come from the committed ansible/inventory/hosts.snapshot.json,
+      # so the runner needs no R2 credentials or terragrunt.
+      INVENTORY_SOURCE: snapshot
+    json: {}
+  # Inside the data mount, so the 02:30 PBS backup of the semaphore LXC
+  # carries the etcd snapshots off the host.
+  - name: talos
+    env:
+      ANSIBLE_CONFIG: ./ansible/ansible.cfg
+      ANSIBLE_VAULT_PASSWORD_FILE: /home/semaphore/.vault_pass
+      TALOS_ETCD_BACKUP_DIR: /var/lib/semaphore/etcd-backups
+    json: {}
+
+templates:
+  - name: 'Hosts: Verify'
+    playbook: ansible/playbooks/hosts/verify.yml
+    description: Read-only health check across the fleet.
+    inventory: hosts
+    repository: proxmox-infra
+    environment: hosts
+
+  - name: 'Hosts: Patch'
+    playbook: ansible/playbooks/hosts/patch.yml
+    description: >-
+      Wave-sequenced patching. Pick a wave; reboot and snapshots are opt-in.
+      Tick Semaphore's own Dry Run box for --check.
+    inventory: hosts
+    repository: proxmox-infra
+    environment: hosts
+    # patch_wave is an enum, never free text — free text is how someone types
+    # a pattern that reaches the runner itself.
+    survey_vars:
+      - name: patch_wave
+        title: Wave
+        type: enum
+        required: true
+        default_value: patch_services
+        description: >-
+          Which wave to patch. Members are in
+          ansible/inventory/group_vars/all/patching.yml; DNS pairs are split
+          across two waves.
+        values:
+          - {name: 'DNS primaries', value: patch_dns_primaries}
+          - {name: 'DNS secondaries', value: patch_dns_secondaries}
+          - {name: 'services', value: patch_services}
+          - {name: 'control plane', value: patch_control_plane}
+          - {name: 'ALL waves in order', value: patch_all}
+      - name: os_patch_reboot_allowed
+        title: Allow reboot
+        type: enum
+        required: true
+        default_value: 'false'
+        description: Reboot hosts that require one after patching.
+        values:
+          - {name: 'no — patch only', value: 'false'}
+          - {name: 'yes — reboot if required', value: 'true'}
+      - name: os_patch_snapshot_enabled
+        title: Snapshot first
+        type: enum
+        required: true
+        default_value: 'false'
+        description: Take a Proxmox snapshot before patching each host.
+        values:
+          - {name: 'no', value: 'false'}
+          - {name: 'yes', value: 'true'}
+      - name: os_patch_min_free_disk_mb
+        title: Min free disk (MB)
+        type: int
+        required: false
+        default_value: '512'
+        description: Preflight gate. The DNS containers only have 4 GB disks.
+
+  # Idempotent and restarts nothing, so it runs fleet-wide with no survey.
+  - name: 'Hosts: Authorized Keys'
+    playbook: ansible/playbooks/hosts/authorized-keys.yml
+    description: Authorize the semaphore-automation public key on every host.
+    inventory: hosts
+    repository: proxmox-infra
+    environment: hosts
+
+  # One patch wave per run: common_docker restarts Docker when daemon.json
+  # changes, and the waves split each DNS pair (and leave out semaphore itself).
+  - name: 'Hosts: Configure'
+    playbook: ansible/playbooks/hosts/configure.yml
+    description: >-
+      Steady-state configuration (system packages, Docker) for one patch wave.
+      Tick Semaphore's own Dry Run box for --check.
+    inventory: hosts
+    repository: proxmox-infra
+    environment: hosts
+    survey_vars:
+      - name: target
+        title: Wave
+        type: enum
+        required: true
+        default_value: patch_services
+        description: Hosts in the wave, from ansible/inventory/group_vars/all/patching.yml.
+        values:
+          - {name: 'DNS primaries', value: patch_dns_primaries}
+          - {name: 'DNS secondaries', value: patch_dns_secondaries}
+          - {name: 'services', value: patch_services}
+          - {name: 'control plane', value: patch_control_plane}
+
+  # Deletes each node's query history for good, so the confirmation defaults to
+  # no. Dry Run (gates and doctor only) needs no confirmation.
+  - name: 'Pi-hole: Reset'
+    playbook: ansible/playbooks/hosts/pihole-reset.yml
+    description: >-
+      Wipe query history, statistics and logs, one node at a time while the
+      partner answers DNS. Gravity, lists and settings stay.
+    inventory: hosts
+    repository: proxmox-infra
+    environment: hosts
+    survey_vars:
+      - name: pihole_reset_nodes
+        title: Nodes
+        type: enum
+        required: true
+        default_value: 'pihole-1:pihole-2'
+        description: Both nodes run in order, never at the same time.
+        values:
+          - {name: 'both, one after the other', value: 'pihole-1:pihole-2'}
+          - {name: 'pihole-1', value: pihole-1}
+          - {name: 'pihole-2', value: pihole-2}
+      - name: pihole_reset_confirm
+        title: Delete the query history
+        type: enum
+        required: true
+        default_value: 'false'
+        description: Needed for a real run; a Dry Run ignores it. The history cannot be recovered.
+        values:
+          - {name: 'no', value: 'false'}
+          - {name: 'yes, delete it', value: 'true'}
+
+  - name: 'Talos: etcd Backup'
+    playbook: ansible/playbooks/talos/etcd-backup.yml
+    description: >-
+      Snapshot etcd (os:etcd:backup identity) into
+      /var/lib/semaphore/etcd-backups, keep the newest 14. Runs nightly.
+    inventory: talos
+    repository: proxmox-infra
+    environment: talos
+
+# Cron in SEMAPHORE_SCHEDULE_TIMEZONE (the stack's TZ, Europe/Berlin).
+schedules:
+  # Before the 02:30 PBS job, so each night's snapshot is in that night's
+  # backup of the semaphore LXC.
+  - name: Nightly etcd backup
+    template: 'Talos: etcd Backup'
+    cron: '0 2 * * *'
+    active: true

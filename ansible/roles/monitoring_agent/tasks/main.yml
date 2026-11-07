@@ -1,0 +1,256 @@
+---
+# ansible/roles/monitoring_agent/tasks/main.yml
+#
+# Each release lands in its own directory under monitoring_agent_install_dir
+# and /usr/local/bin/<name> is a symlink to it, so a version bump installs
+# beside the old binary and the link change triggers the restart.
+
+- name: Monitoring agent — install directory
+  tags: [monitoring, node_exporter, cadvisor]
+  ansible.builtin.file:
+    path: "{{ monitoring_agent_install_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+
+- name: Monitoring agent — node_exporter
+  tags: [monitoring, node_exporter]
+  vars:
+    _ne_release: node_exporter-{{ monitoring_agent_node_exporter_version }}.linux-amd64
+    _ne_url: https://github.com/prometheus/node_exporter/releases/download/v{{ monitoring_agent_node_exporter_version }}
+  block:
+    - name: Create the node_exporter system user
+      ansible.builtin.user:
+        name: node_exporter
+        system: true
+        shell: /usr/sbin/nologin
+        create_home: false
+
+    - name: Create the textfile collector directory
+      ansible.builtin.file:
+        path: "{{ monitoring_agent_textfile_dir }}"
+        state: directory
+        owner: root
+        group: node_exporter
+        mode: '0755'
+
+    - name: Download the node_exporter release
+      ansible.builtin.get_url:
+        url: "{{ _ne_url }}/{{ _ne_release }}.tar.gz"
+        checksum: "sha256:{{ _ne_url }}/sha256sums.txt"
+        dest: "{{ monitoring_agent_install_dir }}/{{ _ne_release }}.tar.gz"
+        mode: '0644'
+
+    - name: Unpack the node_exporter release
+      ansible.builtin.unarchive:
+        src: "{{ monitoring_agent_install_dir }}/{{ _ne_release }}.tar.gz"
+        dest: "{{ monitoring_agent_install_dir }}"
+        remote_src: true
+        creates: "{{ monitoring_agent_install_dir }}/{{ _ne_release }}/node_exporter"
+
+    - name: Link the node_exporter binary
+      ansible.builtin.file:
+        src: "{{ monitoring_agent_install_dir }}/{{ _ne_release }}/node_exporter"
+        dest: /usr/local/bin/node_exporter
+        state: link
+        force: true
+      notify: restart node_exporter
+
+    - name: Install the node_exporter systemd unit
+      ansible.builtin.template:
+        src: node_exporter.service.j2
+        dest: /etc/systemd/system/node_exporter.service
+        owner: root
+        group: root
+        mode: '0644'
+      notify: restart node_exporter
+
+    - name: Enable and start node_exporter
+      ansible.builtin.systemd:
+        name: node_exporter
+        enabled: true
+        state: started
+        daemon_reload: true
+
+- name: Monitoring agent — cAdvisor
+  tags: [monitoring, cadvisor]
+  vars:
+    _ca_binary: cadvisor-v{{ monitoring_agent_cadvisor_version }}-linux-amd64
+  block:
+    - name: Download the cAdvisor binary
+      ansible.builtin.get_url:
+        url: https://github.com/google/cadvisor/releases/download/v{{ monitoring_agent_cadvisor_version }}/{{ _ca_binary }}
+        dest: "{{ monitoring_agent_install_dir }}/{{ _ca_binary }}"
+        owner: root
+        group: root
+        mode: '0755'
+
+    - name: Link the cAdvisor binary
+      ansible.builtin.file:
+        src: "{{ monitoring_agent_install_dir }}/{{ _ca_binary }}"
+        dest: /usr/local/bin/cadvisor
+        state: link
+        force: true
+      notify: restart cadvisor
+
+    - name: Install the cAdvisor systemd unit
+      ansible.builtin.template:
+        src: cadvisor.service.j2
+        dest: /etc/systemd/system/cadvisor.service
+        owner: root
+        group: root
+        mode: '0644'
+      notify: restart cadvisor
+
+    - name: Enable and start cAdvisor
+      ansible.builtin.systemd:
+        name: cadvisor
+        enabled: true
+        state: started
+        daemon_reload: true
+
+- name: Monitoring agent — Alloy
+  tags: [monitoring, alloy]
+  vars:
+    _al_url: https://github.com/grafana/alloy/releases/download/v{{ monitoring_agent_alloy_version }}
+    _al_dir: "{{ monitoring_agent_install_dir }}/alloy-{{ monitoring_agent_alloy_version }}"
+  block:
+    - name: Install unzip for the Alloy release archive
+      ansible.builtin.apt:
+        name: unzip
+        state: present
+
+    # Reads the journal (systemd-journal) and container logs through the
+    # Docker API (docker group, root-equivalent on this host).
+    - name: Create the alloy system user
+      ansible.builtin.user:
+        name: alloy
+        system: true
+        shell: /usr/sbin/nologin
+        create_home: false
+        groups: [systemd-journal, docker]
+        append: true
+
+    - name: Create the Alloy config and data directories
+      ansible.builtin.file:
+        path: "{{ item.path }}"
+        state: directory
+        owner: "{{ item.owner }}"
+        group: alloy
+        mode: "{{ item.mode }}"
+      loop:
+        - {path: /etc/alloy, owner: root, mode: '0750'}
+        - {path: /var/lib/alloy, owner: alloy, mode: '0750'}
+        - {path: "{{ _al_dir }}", owner: root, mode: '0755'}
+
+    # The zip is 169Mi and carries no Unix mode bits, so it is fetched only
+    # while the binary is missing, removed once unpacked, and the binary is
+    # made executable explicitly.
+    - name: Check for the unpacked Alloy binary
+      ansible.builtin.stat:
+        path: "{{ _al_dir }}/alloy-linux-amd64"
+      register: monitoring_agent_alloy_binary
+
+    - name: Download and unpack the Alloy release
+      when: not monitoring_agent_alloy_binary.stat.exists
+      block:
+        - name: Download the Alloy release
+          ansible.builtin.get_url:
+            url: "{{ _al_url }}/alloy-linux-amd64.zip"
+            checksum: "sha256:{{ _al_url }}/SHA256SUMS"
+            dest: "{{ _al_dir }}/alloy-linux-amd64.zip"
+            mode: '0644'
+
+        - name: Unpack the Alloy release
+          ansible.builtin.unarchive:
+            src: "{{ _al_dir }}/alloy-linux-amd64.zip"
+            dest: "{{ _al_dir }}"
+            remote_src: true
+
+    - name: Remove the Alloy release archive
+      ansible.builtin.file:
+        path: "{{ _al_dir }}/alloy-linux-amd64.zip"
+        state: absent
+
+    - name: Make the Alloy binary executable
+      ansible.builtin.file:
+        path: "{{ _al_dir }}/alloy-linux-amd64"
+        owner: root
+        group: root
+        mode: '0755'
+      notify: restart alloy
+
+    - name: Link the Alloy binary
+      ansible.builtin.file:
+        src: "{{ _al_dir }}/alloy-linux-amd64"
+        dest: /usr/local/bin/alloy
+        state: link
+        force: true
+      notify: restart alloy
+
+    - name: Write the Loki push password
+      ansible.builtin.copy:
+        content: "{{ monitoring_agent_loki_push_password }}"
+        dest: /etc/alloy/loki-password
+        owner: root
+        group: alloy
+        mode: '0640'
+      no_log: true
+      notify: restart alloy
+
+    - name: Render the Alloy config
+      ansible.builtin.template:
+        src: config.alloy.j2
+        dest: /etc/alloy/config.alloy
+        owner: root
+        group: alloy
+        mode: '0640'
+      notify: restart alloy
+
+    - name: Install the Alloy systemd unit
+      ansible.builtin.template:
+        src: alloy.service.j2
+        dest: /etc/systemd/system/alloy.service
+        owner: root
+        group: root
+        mode: '0644'
+      notify: restart alloy
+
+    - name: Enable and start Alloy
+      ansible.builtin.systemd:
+        name: alloy
+        enabled: true
+        state: started
+        daemon_reload: true
+
+- name: Monitoring agent — etcd backup age
+  when: monitoring_agent_etcd_backup_dir | length > 0
+  tags: [monitoring, etcd_backup]
+  block:
+    - name: Install the etcd backup age script
+      ansible.builtin.template:
+        src: etcd-backup-age.sh.j2
+        dest: /usr/local/bin/etcd-backup-age
+        owner: root
+        group: root
+        mode: '0755'
+
+    - name: Install the etcd backup age service and timer
+      ansible.builtin.template:
+        src: "{{ item }}.j2"
+        dest: /etc/systemd/system/{{ item }}
+        owner: root
+        group: root
+        mode: '0644'
+      loop:
+        - etcd-backup-age.service
+        - etcd-backup-age.timer
+      notify: reload systemd
+
+    - name: Enable and start the etcd backup age timer
+      ansible.builtin.systemd:
+        name: etcd-backup-age.timer
+        enabled: true
+        state: started
+        daemon_reload: true
