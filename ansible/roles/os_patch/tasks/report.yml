@@ -1,0 +1,49 @@
+---
+# ansible/roles/os_patch/tasks/report.yml
+
+- name: Report | Build the run report
+  ansible.builtin.set_fact:
+    os_patch_report:
+      host: "{{ inventory_hostname }}"
+      vmid: "{{ vmid | default(none) }}"
+      started: "{{ os_patch_started }}"
+      finished: "{{ '%Y-%m-%dT%H:%M:%SZ' | strftime(ansible_facts['date_time']['epoch'] | int, utc=True) }}"
+      changed: "{{ os_patch_apt_result.changed | default(false) }}"
+      reboot_required: "{{ os_patch_reboot_required.stat.exists | default(false) }}"
+      reboot_packages: "{{ os_patch_reboot_pkgs | default([]) }}"
+      rebooted: "{{ os_patch_reboot_result.changed | default(false) }}"
+      kernel_before: "{{ os_patch_kernel_before | default('') }}"
+      kernel_after: "{{ os_patch_kernel_after | default(os_patch_kernel_before) | default('') }}"
+      docker_before: "{{ os_patch_docker_before | default([]) }}"
+      docker_after: "{{ os_patch_docker_after | default([]) }}"
+      failed_units: "{{ os_patch_failed_units_after | default([]) }}"
+      snapshot: "{{ os_patch_snapshot_name | default(none) if os_patch_snapshot_enabled | bool else none }}"
+
+- name: Report | Ensure the report directory exists
+  ansible.builtin.file:
+    path: "{{ os_patch_report_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+
+# Reports are per-run log artifacts, not converged state: each carries a fresh
+# timestamp, so they always write. changed_when: false keeps that out of the
+# change count, which is what an idempotence check measures.
+- name: Report | Write the run report
+  ansible.builtin.copy:
+    content: "{{ os_patch_report | to_nice_json }}\n"
+    dest: "{{ os_patch_report_dir }}/{{ os_patch_started | regex_replace('[^0-9A-Za-z]', '') }}.json"
+    owner: root
+    group: root
+    mode: '0644'
+  changed_when: false
+
+- name: Report | Refresh latest.json
+  ansible.builtin.copy:
+    content: "{{ os_patch_report | to_nice_json }}\n"
+    dest: "{{ os_patch_report_dir }}/latest.json"
+    owner: root
+    group: root
+    mode: '0644'
+  changed_when: false

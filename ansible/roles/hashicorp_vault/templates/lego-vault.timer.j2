@@ -1,0 +1,11 @@
+# {{ ansible_managed }}
+[Unit]
+Description=Daily renewal check for the {{ hashicorp_vault_domain }} certificate
+
+[Timer]
+OnCalendar={{ hashicorp_vault_renew_on_calendar }}
+RandomizedDelaySec=30m
+Persistent=true
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,54 @@
+---
+# HashiCorp Vault — the homelab's secret store (docs/VAULT.md)
+#
+# Deployment: by hand only, `make komodo-deploy STACK=vault` (stack tag
+# manual-deploy). Every start leaves Vault sealed; unseal with 2 of the 3
+# Shamir shares kept in Bitwarden.
+# URL: https://vault.example.com:8200, straight to this LXC: Vault terminates
+# TLS itself so it never depends on the cluster's Traefik.
+# TLS: Let's Encrypt via lego on the host (role hashicorp_vault), which copies
+# the certificate into ${APPDATA_DIR}/vault/tls and sends SIGHUP to reload it.
+
+name: vault
+
+services:
+  vault:
+    container_name: vault
+    restart: unless-stopped
+    image: hashicorp/vault:2.2.2@sha256:dfa48c2fa2b0099ccb47681ec5c4804bf5aec9d6879ecfee07ad4b92a5427ad6
+    command: server
+    ports:
+      - 8200:8200
+    networks:
+      - vault_network
+    environment:
+      TZ: ${TZ}
+      # disable_mlock = true (vault.hcl): the entrypoint must not try setcap.
+      SKIP_SETCAP: 'true'
+      # For `docker exec vault vault ...` and the healthcheck.
+      VAULT_ADDR: https://127.0.0.1:8200
+      VAULT_TLS_SERVER_NAME: vault.example.com
+    volumes:
+      # The image runs as its non-root vault user and chowns nothing: role
+      # hashicorp_vault gives file/ and logs/ to that uid.
+      - ./vault.hcl:/vault/config/vault.hcl:ro
+      - ${APPDATA_DIR}/vault/file:/vault/file
+      - ${APPDATA_DIR}/vault/logs:/vault/logs
+      - ${APPDATA_DIR}/vault/tls:/vault/tls:ro
+    # `vault status` exits 2 while sealed, so a sealed Vault shows unhealthy.
+    healthcheck:
+      test: ["CMD", "vault", "status"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: '3'
+
+networks:
+  vault_network:
+    name: vault_network
+    driver: bridge

@@ -1,0 +1,11 @@
+---
+# ansible/inventory/host_vars/paperless-ngx.yml
+# Komodo Periphery secrets for paperless-ngx, from kv/proxmox-infra/paperless
+# (group_vars/all/secrets.yml), rendered into the host's periphery.config.toml
+# by `make -C ansible periphery-secrets HOST=paperless-ngx`. Stacks reference them as
+# [[NAME]].
+
+komodo_periphery_secrets:
+  POSTGRES_PASSWORD: "{{ kv_paperless.postgres_password }}"
+  PAPERLESS_SECRET_KEY: "{{ kv_paperless.secret_key }}"
+  PAPERLESS_ADMIN_PASSWORD: "{{ kv_paperless.admin_password }}"

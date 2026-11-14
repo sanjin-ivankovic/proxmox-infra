@@ -1,0 +1,26 @@
+---
+# ansible/roles/komodo_periphery/meta/main.yml
+
+galaxy_info:
+  role_name: komodo_periphery
+  author: Maintainer Name
+  description: Install the Komodo Periphery agent (binary + systemd) on a docker host
+  license: MIT
+  min_ansible_version: '2.9'
+  platforms:
+    - name: Debian
+      versions:
+        - 'trixie'
+    - name: Ubuntu
+      versions:
+        - 'noble'
+  galaxy_tags:
+    - komodo
+    - docker
+    - deployment
+
+# Periphery needs Docker + the compose plugin to deploy stacks.
+dependencies:
+  - role: common_docker
+
+allow_duplicates: false

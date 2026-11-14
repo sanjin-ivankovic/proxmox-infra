@@ -1,0 +1,10 @@
+---
+# ansible/inventory/host_vars/pihole-1.yml
+# Komodo Periphery secrets for pihole-1, from kv/proxmox-infra/pihole
+# (group_vars/all/secrets.yml), rendered into the host's periphery.config.toml
+# by `make -C ansible periphery-secrets HOST=pihole-1`. Stacks reference them as
+# [[NAME]].
+# Shared by the Pi-hole pair.
+
+komodo_periphery_secrets:
+  WEB_PASSWORD: "{{ kv_pihole.web_password }}"

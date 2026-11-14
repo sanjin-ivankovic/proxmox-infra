@@ -1,0 +1,28 @@
+---
+# ansible/roles/monitoring_agent/handlers/main.yml
+
+- name: Reload systemd
+  ansible.builtin.systemd:
+    daemon_reload: true
+  listen: reload systemd
+
+- name: Restart node_exporter
+  ansible.builtin.systemd:
+    name: node_exporter
+    state: restarted
+    daemon_reload: true
+  listen: restart node_exporter
+
+- name: Restart cAdvisor
+  ansible.builtin.systemd:
+    name: cadvisor
+    state: restarted
+    daemon_reload: true
+  listen: restart cadvisor
+
+- name: Restart Alloy
+  ansible.builtin.systemd:
+    name: alloy
+    state: restarted
+    daemon_reload: true
+  listen: restart alloy

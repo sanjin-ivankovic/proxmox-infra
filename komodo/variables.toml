@@ -1,0 +1,22 @@
+# ============================================================================
+# Komodo Resource Sync — Variables (shared, NON-SECRET pins)
+# ============================================================================
+# Referenced from stack `environment` blocks as [[NAME]]. These are committed in
+# git on purpose — they are not secret. Real secrets live host-local in each
+# periphery's [secrets] table (delivered by Ansible from Vault), also via [[NAME]].
+# ============================================================================
+
+[[variable]]
+name = "TZ"
+value = "Europe/Berlin"
+description = "Timezone for all proxmox-infra service containers"
+
+[[variable]]
+name = "APPDATA_DIR"
+value = "/srv/docker/appdata"
+description = "On-host base directory for service persistent data (bind mounts)"
+
+[[variable]]
+name = "REGISTRY_IMAGE"
+value = "registry.example.com/example-org/proxmox-infra"
+description = "Harbor registry prefix for custom-built images (pihole/unbound/dnscrypt)"

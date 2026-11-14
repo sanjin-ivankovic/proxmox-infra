@@ -1,0 +1,30 @@
+# ============================================================================
+# Komodo Resource Sync — Alerters
+# ============================================================================
+# One alerter: Komodo alerts to the ntfy topic komodo-alerts
+# (argo-apps apps/user/ntfy). The komodo user may only write that topic.
+#
+# [[NTFY_KOMODO_AUTH]] is a Core secret (core.config.toml [secrets], rendered
+# by the komodo_core role from kv/proxmox-infra/komodo-core ntfy_token). Core interpolates it
+# into the URL when it sends, and redacts it in errors.
+#
+# ntfy runs in the Talos cluster: while the cluster is down, alerts about that
+# outage are not delivered.
+# ============================================================================
+
+[[alerter]]
+name = "ntfy"
+description = "Komodo alerts to ntfy (komodo-alerts)."
+tags = ["iac"]
+
+[alerter.config]
+enabled = true
+endpoint.type = "Ntfy"
+endpoint.params.url = "https://ntfy.example.com/komodo-alerts?auth=[[NTFY_KOMODO_AUTH]]"
+alert_types = [
+  "ProcedureFailed",
+  "StackStateChange",
+  "ServerUnreachable",
+  "ServerDisk",
+  "ResourceSyncPendingUpdates",
+]

@@ -1,0 +1,110 @@
+{
+  "../../terraform/lxc": [
+    {
+      "hostname": "bitwarden",
+      "ip": "10.140.0.12",
+      "tags": [
+        "docker",
+        "password-manager"
+      ],
+      "vmid": 412
+    },
+    {
+      "hostname": "gitlab",
+      "ip": "10.140.0.10",
+      "tags": [
+        "docker",
+        "git"
+      ],
+      "vmid": 410
+    },
+    {
+      "hostname": "gitlab-runner",
+      "ip": "10.140.0.11",
+      "tags": [
+        "ci",
+        "docker"
+      ],
+      "vmid": 411
+    },
+    {
+      "hostname": "komodo",
+      "ip": "10.140.0.14",
+      "tags": [
+        "ci",
+        "docker",
+        "komodo"
+      ],
+      "vmid": 414
+    },
+    {
+      "hostname": "paperless-ngx",
+      "ip": "10.140.0.13",
+      "tags": [
+        "docker",
+        "document-management"
+      ],
+      "vmid": 413
+    },
+    {
+      "hostname": "pihole-1",
+      "ip": "10.110.0.12",
+      "tags": [
+        "dns",
+        "docker",
+        "filtering"
+      ],
+      "vmid": 112
+    },
+    {
+      "hostname": "pihole-2",
+      "ip": "10.110.0.13",
+      "tags": [
+        "dns",
+        "docker",
+        "filtering"
+      ],
+      "vmid": 113
+    },
+    {
+      "hostname": "semaphore",
+      "ip": "10.140.0.15",
+      "tags": [
+        "ansible",
+        "docker",
+        "terraform"
+      ],
+      "vmid": 415
+    },
+    {
+      "hostname": "technitium-1",
+      "ip": "10.110.0.10",
+      "tags": [
+        "authoritative",
+        "dns",
+        "docker"
+      ],
+      "vmid": 110
+    },
+    {
+      "hostname": "technitium-2",
+      "ip": "10.110.0.11",
+      "tags": [
+        "authoritative",
+        "dns",
+        "docker"
+      ],
+      "vmid": 111
+    },
+    {
+      "hostname": "vault",
+      "ip": "10.140.0.16",
+      "tags": [
+        "docker",
+        "secrets"
+      ],
+      "vmid": 416
+    }
+  ],
+  "../../terraform/talos": []
+}

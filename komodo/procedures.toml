@@ -1,0 +1,119 @@
+# ============================================================================
+# Komodo Resource Sync — Procedures (deploy drivers)
+# ============================================================================
+# A Procedure composes executions into ordered Stages. Executions inside a stage
+# run in PARALLEL; stages run SEQUENTIALLY, and the first failing stage stops
+# the run and raises a ProcedureFailed alert.
+#
+# GitOps Apply is the only deploy path: ONE GitLab webhook on push to main
+#   https://komodo.example.com/listener/gitlab/procedure/<GitOps Apply id>/main
+# (secret = kv/ci/komodo webhook_secret, push events, branch filter `main`).
+# There is no separate ResourceSync webhook: the sync runs as stage 1, so it
+# can never race the deploy stages.
+#
+#   1. Sync: RunSync applies komodo/*.toml. Stacks set `deploy = true`, so the
+#      sync deploys new stacks and stacks whose Komodo config changed
+#      (environment, file_paths, server, ...), ordered by `after`. It also
+#      deletes resources tagged `iac` that were removed from the files.
+#   2. Wave 1, 3. Settle (30 s), 4. Wave 2: BatchDeployStackIfChanged refreshes each stack's
+#      cache and acts on stacks whose compose file or config_files changed
+#      since their last deploy (requires = "Restart" restarts the service).
+#      Wave 1 holds the primaries and single-node stacks, wave 2 the HA
+#      secondaries, so a shared compose or config change never takes both
+#      members of a pair down at once.
+#
+# Komodo filters webhooks by branch, never by path; IfChanged keeps an
+# unrelated push from redeploying anything.
+#
+# Editing GitOps Apply itself: the sync stage cannot update the Procedure
+# that is running it, so that push's run fails with the change pending. Run
+# the sync once afterwards (komodo/README.md, What stays manual).
+# ============================================================================
+
+[[procedure]]
+name = "GitOps Apply"
+description = "On push to main: sync komodo/*.toml (deploys config changes), then deploy changed stacks wave 1, then wave 2."
+tags = ["iac", "deploy"]
+
+[[procedure.config.stage]]
+name = "Sync"
+executions = [
+  { execution.type = "RunSync", execution.params.sync = "proxmox-infra" },
+]
+
+[[procedure.config.stage]]
+name = "Wave 1 (primaries, single nodes)"
+executions = [
+  { execution.type = "BatchDeployStackIfChanged", execution.params.pattern = "*", execution.params.tags = ["iac", "wave-1"] },
+]
+
+# compose up -d returns before the service answers again; give a recreated
+# primary time to come back before its secondary goes down.
+[[procedure.config.stage]]
+name = "Settle"
+executions = [
+  { execution.type = "Sleep", execution.params.duration_ms = 30000 },
+]
+
+[[procedure.config.stage]]
+name = "Wave 2 (HA secondaries)"
+executions = [
+  { execution.type = "BatchDeployStackIfChanged", execution.params.pattern = "*", execution.params.tags = ["iac", "wave-2"] },
+]
+
+# ----------------------------------------------------------------------------
+# Redeploy Images: run by CI (komodo:redeploy-images, scripts/komodo_trigger.py)
+# after build:pihole, build:unbound or build:semaphore re-pushed a tag. Each
+# DeployStack pulls first (auto_pull defaults to true), so a stack whose image
+# digest did not change stays as it is. Same wave order as GitOps Apply.
+# ----------------------------------------------------------------------------
+[[procedure]]
+name = "Redeploy Images"
+description = "From CI after a self-built image is pushed: pull and redeploy its consumers, primary before secondary."
+tags = ["iac", "deploy"]
+
+[[procedure.config.stage]]
+name = "Wave 1"
+executions = [
+  { execution.type = "DeployStack", execution.params.stack = "pihole-1" },
+  { execution.type = "DeployStack", execution.params.stack = "semaphore" },
+]
+
+[[procedure.config.stage]]
+name = "Settle"
+executions = [
+  { execution.type = "Sleep", execution.params.duration_ms = 30000 },
+]
+
+[[procedure.config.stage]]
+name = "Wave 2"
+executions = [
+  { execution.type = "DeployStack", execution.params.stack = "pihole-2" },
+]
+
+# ----------------------------------------------------------------------------
+# One Pi-hole node each, started through the webhook listener by
+# ansible/playbooks/hosts/pihole-reset.yml (scripts/komodo_trigger.py with
+# kv/ci/komodo webhook_secret), so the reset runs from Semaphore as well as
+# from the laptop without Komodo API credentials.
+[[procedure]]
+name = "Deploy pihole-1"
+description = "Deploy the pihole-1 stack (used by the Pi-hole reset playbook)."
+tags = ["iac", "deploy"]
+
+[[procedure.config.stage]]
+name = "Deploy"
+executions = [
+  { execution.type = "DeployStack", execution.params.stack = "pihole-1" },
+]
+
+[[procedure]]
+name = "Deploy pihole-2"
+description = "Deploy the pihole-2 stack (used by the Pi-hole reset playbook)."
+tags = ["iac", "deploy"]
+
+[[procedure.config.stage]]
+name = "Deploy"
+executions = [
+  { execution.type = "DeployStack", execution.params.stack = "pihole-2" },
+]

@@ -1,0 +1,113 @@
+# Technitium (authoritative DNS + DHCP)
+
+HA pair running Technitium DNS Server on the `technitium-1` (10.110.0.10) and
+`technitium-2` (10.110.0.11) LXCs, both from
+[`docker-compose.yml`](docker-compose.yml) with `NODE` set per stack. Web UI
+on port 5380.
+
+`technitium-1` is the cluster primary (`ns1.example.com`); `technitium-2` is
+the secondary (`ns2.example.com`) and pulls zones over AXFR. Those server names
+come from `DNS_SERVER_DOMAIN` in the `technitium-1` / `technitium-2` stacks in
+[`komodo/stacks.toml`](../../komodo/stacks.toml).
+
+These servers are **authoritative only** — they serve the `example.com` zone,
+the `10.x` reverse zones, and DHCP for the VLAN scopes. They do not resolve
+external names for clients.
+
+## Service names
+
+The `example.com` zone carries one A record per service (`git`, `registry`,
+`komodo`, `argo`, `gist`, …) pointing at `10.140.0.60` — the MetalLB IP of the
+cluster Traefik `lan` entrypoint (Service `traefik-lan`). A new service needs
+its own record; there is no wildcard. Services that are also public (`auth`,
+`gist`, `plex`, …) use the same name; LAN clients resolve it here and reach
+Traefik directly, internet clients resolve it via Cloudflare and come through
+the tunnel. See
+[Service exposure](../../docs/ARCHITECTURE.md#service-exposure).
+
+## Where external resolution actually happens
+
+Client-facing resolution is the Pi-hole filtering pair, not these hosts:
+
+```text
+client -> Pi-hole (10.110.0.12/.13) -> Unbound (:5335) -> DoT -> Quad9
+                                          ^
+                          DNSSEC validation happens here
+```
+
+See [`services/pihole`](../pihole/docker-compose.yml): each resolver host runs
+a co-located Unbound configured as a DNS-over-TLS forwarder to Quad9
+(`9.9.9.9@853`), which is where DNSSEC validation is performed. Pi-hole
+forwards only `example.com` and private reverse lookups here.
+
+## VLAN egress constraint (load-bearing)
+
+Outbound from the DNS VLAN, **only TCP/853 is permitted**. Ports 53 and 443
+are firewalled off; ICMP is allowed. This is deliberate — it forces all
+external DNS through Unbound's encrypted DoT path.
+
+**Settings -> Recursion** is therefore `Use Specified Network ACL`, allowing
+only the resolver IPs (`ansible/configs/technitium.yml`): their answers then
+carry the RA bit (without it Pi-hole logs "refused to do a recursive
+query"), and private reverse zones these servers do not host answer NXDOMAIN
+locally (locally served zones). Nothing else may recurse: the root hints are
+unreachable on port 53.
+
+Do **not** "fix" anything here by adding forwarders under
+Settings -> Proxy & Forwarders. That would create a second resolution path that
+bypasses Pi-hole's filtering and Unbound's DoT upstream.
+
+## The KSK on `dns.example.com` must stay manually Active
+
+`dns.example.com` is a **private zone whose parent (`example.com`) is unsigned**,
+so a DS record for it will never be published. A signed zone's Key Signing Key
+normally advances `Ready -> Active` on its own once the server detects that DS
+record in the parent — and until it does, it re-queries for the DS every 15
+minutes.
+
+On this VLAN that query cannot leave the host, so the primary logs a
+`DnsClientNoResponseException` stack trace (`dns.example.com. DS IN`, then
+`. DNSKEY IN`) with every root server timing out, roughly every 15 minutes,
+indefinitely. DNS itself is unaffected — the symptom is log noise.
+
+The fix is the option added in Technitium v15.0 for exactly this case: mark the
+KSK Active by hand so the detection loop stops.
+
+**Zones -> dns.example.com -> DNSSEC -> Properties -> KSK row -> activate.**
+
+The dialog states the rule directly: *"If this is a private zone, then you
+should manually activate the KSK so that the DNS Server stops the detection
+process which queries for DS records periodically."*
+
+If the zone is ever re-signed or the KSK rolled over, the new key starts in
+`Ready` and the log noise returns until it is activated again.
+
+Two things that do **not** fix this, both ruled out by testing on 2026-08-10:
+
+- `Settings -> General -> DNSSEC -> Enable DNSSEC Validation` — governs
+  validation of *responses*, not zone maintenance. Disabling it changed nothing.
+- `DNSSEC -> Unsign Zone` — Technitium refuses on a cluster zone
+  (*"Cannot unsign the Cluster Primary zone"*). See below.
+
+## Cluster zone: `dns.example.com`
+
+`dns.example.com` is Technitium's own cluster control-plane zone, paired with
+the `cluster-catalog.dns.example.com` catalog zone. It is DNSSEC-signed by the
+product and its records are tagged *"Cluster managed record. Do not update or
+delete."*
+
+The signed cluster zone has an unsigned parent (`example.com`), so its chain of
+trust cannot be validated against the public root. That is expected for an
+internal-only zone and is not a fault to repair — it is, however, why the KSK
+must be activated by hand (above).
+
+Technitium refuses `DNSSEC -> Unsign Zone` on this zone
+(*"Cannot unsign the Cluster Primary zone"*). Do not attempt to work around it.
+
+## Deploy
+
+Auto-deployed by Komodo from the `technitium-1` / `technitium-2` stacks in
+[`komodo/stacks.toml`](../../komodo/stacks.toml). `technitium-2` is a
+`wave-2` stack `after` `technitium-1`, so a push never restarts both
+nameservers at once — see [HA pairs](../README.md#ha-pairs) and
+[`komodo/README.md`](../../komodo/README.md#ha-pairs).

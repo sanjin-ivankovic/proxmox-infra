@@ -1,0 +1,10 @@
+---
+# ansible/inventory/host_vars/technitium-1.yml
+# Komodo Periphery secrets for technitium-1, from kv/proxmox-infra/technitium
+# (group_vars/all/secrets.yml), rendered into the host's periphery.config.toml
+# by `make -C ansible periphery-secrets HOST=technitium-1`. Stacks reference them as
+# [[NAME]].
+# Shared by the Technitium pair.
+
+komodo_periphery_secrets:
+  DNS_SERVER_ADMIN_PASSWORD: "{{ kv_technitium.admin_password }}"

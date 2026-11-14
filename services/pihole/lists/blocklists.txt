@@ -1,0 +1,8 @@
+# Adlists for both Pi-hole nodes. One URL per line; a trailing "# text"
+# becomes the list's comment in Pi-hole.
+#
+# HaGeZi tiers contain each other: run exactly one. TIF is HaGeZi's threat
+# feed (malware, phishing) and runs alongside the tier, which covers little
+# of it. Adblock format, because FTL matches ||domain^ on subdomains too.
+https://cdn.jsdelivr.net/gh/hagezi/dns-blocklists@latest/adblock/ultimate.txt # HaGeZi Multi Ultimate
+https://cdn.jsdelivr.net/gh/hagezi/dns-blocklists@latest/adblock/tif.txt # HaGeZi Threat Intelligence Feeds

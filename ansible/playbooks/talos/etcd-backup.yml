@@ -1,0 +1,130 @@
+---
+# etcd-backup: snapshot etcd from one control-plane node, compress it and keep
+# the newest talos_etcd_backup_keep snapshots.
+#
+# Nightly from Semaphore ("Talos: etcd Backup", 02:00 Europe/Berlin) into
+# /var/lib/semaphore/etcd-backups, which the 02:30 PBS job backs up with the
+# semaphore LXC. From the laptop, into ansible/talos/configs/backups:
+#
+#   make -C ansible/talos etcd-backup
+#
+# Authenticates with kv/proxmox-infra/talos etcd_backup_talosconfig, an os:etcd:backup
+# talosconfig: it can take snapshots and nothing else. A snapshot holds every
+# cluster Secret in plaintext, hence the 0700 directory and 0600 files.
+# Restore: talos-cluster skill, `talosctl bootstrap --recover-from`.
+
+- name: Talos etcd backup
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  become: false
+  vars:
+    # The Talos inventory pins /usr/bin/python3 for every host; the runner's
+    # modules need the interpreter ansible itself runs on.
+    ansible_python_interpreter: "{{ ansible_playbook_python }}"
+    talos_etcd_backup_dir: >-
+      {{ lookup('ansible.builtin.env', 'TALOS_ETCD_BACKUP_DIR')
+         | default(talos_config_dir ~ '/backups', true) }}
+    talos_etcd_backup_keep: 14
+    talos_etcd_backup_nodes: >-
+      {{ groups['controlplane'] | map('extract', hostvars, 'ansible_host') | list }}
+
+  tasks:
+    - name: Stop here in check mode
+      ansible.builtin.meta: end_play
+      when: ansible_check_mode
+
+    # set_fact pins the name; a templated var would be re-evaluated per task.
+    - name: Name the snapshot
+      ansible.builtin.set_fact:
+        talos_etcd_backup_path: >-
+          {{ talos_etcd_backup_dir }}/etcd-{{ now(utc=true, fmt='%Y%m%dT%H%M%SZ') }}.db
+
+    - name: Create the backup directory
+      ansible.builtin.file:
+        path: "{{ talos_etcd_backup_dir }}"
+        state: directory
+        mode: "0700"
+
+    - name: Snapshot with the etcd-backup identity
+      block:
+        - name: Create a temporary talosconfig
+          ansible.builtin.tempfile:
+            suffix: .talosconfig
+          register: talos_etcd_backup_tc
+
+        - name: Write the etcd-backup talosconfig
+          ansible.builtin.copy:
+            content: "{{ kv_talos.etcd_backup_talosconfig }}"
+            dest: "{{ talos_etcd_backup_tc.path }}"
+            mode: "0600"
+          no_log: true
+
+        # Each control-plane node in turn, so one node down does not cost the
+        # night's backup. talosctl verifies the download and prints
+        # "snapshot info: ... total keys N".
+        - name: Snapshot etcd
+          ansible.builtin.shell: |
+            set -eu
+            for node in {{ talos_etcd_backup_nodes | join(' ') }}; do
+              if talosctl -e "$node" -n "$node" etcd snapshot "$OUT"; then
+                echo "node: $node"
+                exit 0
+              fi
+              rm -f "$OUT" "$OUT.part"
+            done
+            exit 1
+          environment:
+            TALOSCONFIG: "{{ talos_etcd_backup_tc.path }}"
+            OUT: "{{ talos_etcd_backup_path }}"
+          register: talos_etcd_backup_snapshot
+          changed_when: true
+
+        - name: Check the snapshot holds keys
+          ansible.builtin.assert:
+            that:
+              - talos_etcd_backup_snapshot.stdout is search('total keys [1-9]')
+            fail_msg: "{{ talos_etcd_backup_snapshot.stdout }}"
+            quiet: true
+
+        - name: Compress the snapshot
+          ansible.builtin.command: gzip -9 {{ talos_etcd_backup_path | quote }}
+          changed_when: true
+
+        - name: Test the archive
+          ansible.builtin.command: gzip -t {{ (talos_etcd_backup_path ~ '.gz') | quote }}
+          changed_when: false
+
+        - name: Restrict the archive to its owner
+          ansible.builtin.file:
+            path: "{{ talos_etcd_backup_path }}.gz"
+            mode: "0600"
+
+      always:
+        - name: Remove the temporary talosconfig
+          ansible.builtin.file:
+            path: "{{ talos_etcd_backup_tc.path }}"
+            state: absent
+          when: talos_etcd_backup_tc.path is defined
+
+    - name: Find the snapshots
+      ansible.builtin.find:
+        paths: "{{ talos_etcd_backup_dir }}"
+        patterns: etcd-*.db.gz
+      register: talos_etcd_backup_all
+
+    # The names are UTC timestamps, so name order is age order.
+    - name: Remove all but the newest {{ talos_etcd_backup_keep }}
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop: >-
+        {{ (talos_etcd_backup_all.files | map(attribute='path') | sort)[: -(talos_etcd_backup_keep | int)] }}
+
+    - name: Report the snapshot
+      ansible.builtin.debug:
+        msg: >-
+          {{ talos_etcd_backup_path }}.gz from
+          {{ talos_etcd_backup_snapshot.stdout_lines | select('match', 'node: ') | first | replace('node: ', '') }};
+          {{ talos_etcd_backup_snapshot.stdout_lines | select('search', 'snapshot info') | first }};
+          {{ [talos_etcd_backup_all.matched, talos_etcd_backup_keep | int] | min }} kept

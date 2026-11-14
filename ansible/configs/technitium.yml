@@ -1,0 +1,181 @@
+---
+# Technitium DNS + DHCP desired state, applied to technitium-1 (the cluster
+# primary) by scripts/technitium_bootstrap.py; `settings` alone goes to every
+# node in its list. technitium-2 receives every zone
+# below through the cluster catalog and serves no DHCP — Technitium has no DHCP
+# failover, so technitium-1 is the single DHCP server.
+#
+# Records the DHCP server registers (comment "Via '<scope>' DHCP scope") belong
+# to it and are only touched when a name below claims them. Static records not
+# listed here are reported, never deleted; deletions are explicit (`absent`).
+
+catalog: cluster-catalog.dns.example.com
+ttl: 3600
+
+# Server settings, applied to every node listed (not only the primary).
+settings:
+  nodes: [10.110.0.10, 10.110.0.11]
+  # Recursion only for the filtering resolvers, so answers to them carry RA:
+  # dnsmasq (Pi-hole) logs a warning for every reply without it. Loop-safe
+  # because the resolvers send only example.com and private PTRs here, and
+  # locally served zones answer unhosted private reverse zones NXDOMAIN
+  # instead of forwarding them. Every other client stays denied.
+  recursion: UseSpecifiedNetworkACL
+  recursion_acl: [10.110.0.12, 10.110.0.13]
+  locally_served_zones: true
+  # Forwarders serve the server's own lookups (app store, update checks) and
+  # the resolvers' recursion. Outbound :53 to the internet is blocked, so
+  # without them the app store times out.
+  forwarders: [10.110.0.12, 10.110.0.13]
+  forwarder_protocol: Udp
+  # The filtering resolver pair carries nearly every client query, so the per-IP rate
+  # limit would throttle the whole LAN's internal names at once.
+  rate_limit_bypass: [10.110.0.12, 10.110.0.13]
+
+zones:
+  forward: example.com
+  # One per /24. GUEST has none: guest leases stay out of internal DNS.
+  reverse:
+    - 0.100.10.in-addr.arpa # INFRA
+    - 0.105.10.in-addr.arpa # MGMT
+    - 0.110.10.in-addr.arpa # CORE
+    - 0.120.10.in-addr.arpa # ADMIN
+    - 0.130.10.in-addr.arpa # STORAGE
+    - 0.140.10.in-addr.arpa # SERVER
+    - 0.150.10.in-addr.arpa # IOT
+    - 0.160.10.in-addr.arpa # USER
+
+# A in example.com plus a PTR in the matching reverse zone.
+hosts:
+  unifi: 10.100.0.1
+  usw-lite-16: 10.100.0.2
+  usw-flex-mini: 10.100.0.3
+  u7-pro-wall: 10.100.0.4
+  pve: 10.105.0.4
+  pihole-1: 10.110.0.12
+  pihole-2: 10.110.0.13
+  pbs: 10.130.0.50
+  paperless-ngx: 10.140.0.13
+  # Straight to the LXC, not traefik-lan: Vault terminates its own TLS and
+  # must answer before the cluster (and Traefik) has its secrets.
+  vault: 10.140.0.16
+  talos-cp-1: 10.140.0.41
+  talos-cp-2: 10.140.0.42
+  talos-cp-3: 10.140.0.43
+  talos-worker-1: 10.140.0.51
+  talos-worker-2: 10.140.0.52
+  talos-worker-3: 10.140.0.53
+
+# A only, no PTR: names that share one address, and the name servers, whose
+# PTRs (-> ns1/ns2.dns.example.com) the cluster owns.
+aliases:
+  10.110.0.10: [ns1]
+  10.110.0.11: [ns2]
+  # traefik-lan (MetalLB). Every app is <app>.example.com on the lan entrypoint.
+  10.140.0.60:
+    - alertmanager
+    - argo
+    - auth
+    - bazarr
+    - bitwarden
+    - couchdb
+    - dns1
+    - dns2
+    - docmost
+    - docuseal
+    - gist
+    - git
+    - grafana
+    - harbor
+    - headlamp
+    - immich
+    - komodo
+    - lingarr
+    - loki
+    - longhorn
+    - nextcloud
+    - notifiarr
+    - ntfy
+    - obsidian
+    - pages
+    - paperless
+    - pdf
+    - pihole1
+    - pihole2
+    - plex
+    - privatebin
+    - prometheus
+    - prowlarr
+    - qbit
+    - radarr
+    - registry
+    - rss
+    - search
+    - secret
+    - seerr
+    - semaphore
+    - smtp4dev
+    - sonarr
+    - traefik
+    - translate
+    - unraid
+    - zerobyte
+
+# PTR only, no A: servers whose own name is an alias for traefik-lan above
+# (a hosts: entry would give that name a second address), and the UCG's
+# gateway on each network. Pi-hole names clients by these (reverse lookups).
+ptr:
+  10.140.0.10: gitlab
+  10.140.0.11: gitlab-runner
+  10.140.0.12: bitwarden
+  10.140.0.14: komodo
+  10.140.0.15: semaphore
+  10.105.0.1: unifi
+  10.110.0.1: unifi
+  10.120.0.1: unifi
+  10.130.0.1: unifi
+  10.140.0.1: unifi
+  10.150.0.1: unifi
+  10.160.0.1: unifi
+
+absent: []
+
+dhcp:
+  # Applied to every scope unless the scope overrides it. No NTP option: the
+  # UCG does not answer NTP, and clients fall back to their own pools.
+  defaults:
+    lease_hours: 24
+    dns_servers: [10.110.0.12, 10.110.0.13]
+    domain: example.com
+    dns_updates: true
+    dns_ttl: 900
+    # Dynamic pool .100-.199; reservations sit in .50-.99 (inside the
+    # exclusion, which Technitium honours for reserved leases).
+    exclusions: [[1, 99], [200, 254]]
+
+  scopes:
+    20_ADMIN:
+      subnet: 10.120.0.0/24
+      reservations:
+        - { host: Maintainers-MacBook, mac: 00-E0-4C-AD-CB-FD, ip: 10.120.0.50 }
+        - { host: Maintainers-MacBook, mac: 5C-E9-1E-C1-88-8D, ip: 10.120.0.51 }
+    # Reservations only: Unraid takes its address from DHCP. PBS is static and
+    # has a host record above — a reservation would re-register that name.
+    30_STORAGE:
+      subnet: 10.130.0.0/24
+      reserved_only: true
+      exclusions: []
+      reservations:
+        - { host: tower, mac: 24-5E-BE-87-A1-F8, ip: 10.130.0.30 }
+    50_IOT:
+      subnet: 10.150.0.0/24
+      reservations:
+        - { host: bosch-washer, mac: E4-67-A6-15-BF-04, ip: 10.150.0.52 }
+        - { host: bosch-dryer, mac: E4-67-A6-07-33-FE, ip: 10.150.0.53 }
+        - { host: formuler, mac: 00-1E-B8-D5-16-3A, ip: 10.150.0.54 }
+        - { host: printer, mac: 84-A9-3E-50-13-3A, ip: 10.150.0.55 }
+    60_USER:
+      subnet: 10.160.0.0/24
+
+  # CORE and SERVER are static-only; GUEST is served by the UCG.
+  absent: [10_CORE, 40_SERVER, 70_GUEST, Default]

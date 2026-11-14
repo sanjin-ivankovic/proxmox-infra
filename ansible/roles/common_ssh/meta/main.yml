@@ -1,0 +1,26 @@
+---
+# ansible/roles/common_ssh/meta/main.yml
+
+galaxy_info:
+  role_name: common_ssh
+  author: Maintainer Name
+  description: SSH hardening and security configuration for Debian/Ubuntu
+  license: MIT
+  min_ansible_version: '2.9'
+  platforms:
+    - name: Debian
+      versions:
+        - 'trixie'
+    - name: Ubuntu
+      versions:
+        - 'noble'
+  galaxy_tags:
+    - ssh
+    - security
+    - hardening
+    - debian
+    - ubuntu
+
+dependencies: []
+
+allow_duplicates: false

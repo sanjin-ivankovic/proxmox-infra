@@ -1,0 +1,24 @@
+---
+# Komodo Core — deploy the service-deployment control plane.
+#
+# Runs Komodo Core (UI/API) + FerretDB v2 on the komodo LXC. Core drives every
+# host's Periphery agent to deploy docker-compose stacks.
+#
+# Prerequisites: bootstrap + configure already run on the komodo host, and the
+# secrets in kv/proxmox-infra/komodo-core are set.
+#
+# Usage:
+#   ansible-playbook playbooks/komodo/core.yml --limit komodo
+#
+# After first run, complete the one-time Core->Periphery key handshake (see the
+# role's post-install message), then run the periphery playbook per host.
+
+- name: Deploy Komodo Core
+  hosts: "{{ target | default('komodo') }}"
+  become: true
+  gather_facts: true
+  remote_user: maintainer # root login disabled after bootstrap
+  tags: [komodo, core]
+
+  roles:
+    - role: komodo_core

@@ -1,0 +1,9 @@
+# {{ ansible_managed }}
+[Unit]
+Description=Save a Vault Raft snapshot to {{ hashicorp_vault_snapshot_dir }}
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/vault-raft-snapshot

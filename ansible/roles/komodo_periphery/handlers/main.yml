@@ -1,0 +1,14 @@
+---
+# ansible/roles/komodo_periphery/handlers/main.yml
+
+- name: Reload systemd
+  ansible.builtin.systemd:
+    daemon_reload: true
+  listen: reload systemd
+
+- name: Restart Periphery
+  ansible.builtin.systemd:
+    name: "{{ komodo_periphery_service_name }}"
+    state: restarted
+    daemon_reload: false
+  listen: restart periphery

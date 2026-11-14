@@ -1,0 +1,84 @@
+# ansible/configs/pbs.yml
+# Proxmox Backup Server jobs as code, applied by scripts/pbs_bootstrap.py:
+#   make pbs-bootstrap [ARGS=--dry-run]   converge
+#   make pbs-doctor                       exit 1 on drift
+# Keys are the PBS API property names. A declared job is converged fully:
+# a property it has on PBS but not here is cleared. Job IDs cannot be
+# renamed; the generated ones (s-…, v-…) are the UI's.
+#
+# Backups land on datastore01 from PVE (terraform/backup): containers in the
+# root namespace, Talos VMs in namespace "talos". offsite is a virtiofs share
+# from Unraid disk3 that zerobyte uploads to Google Drive at 07:00.
+
+datastores:
+  datastore01:
+    gc-schedule: "sun 04:00"
+  offsite:
+    gc-schedule: "sun 06:40"
+    comment: "Off-site copy (LXC backups), virtiofs from Unraid disk3; zerobyte uploads it to Google Drive"
+
+namespaces:
+  datastore01:
+    - talos
+
+prune:
+  # No ns and no max-depth: recurses into every namespace of datastore01,
+  # talos included. Prune jobs on one group combine, so the stricter
+  # talos-prune decides there.
+  s-b2795548-772a:
+    store: datastore01
+    schedule: "03:30"
+    keep-last: 3
+    keep-daily: 7
+    keep-weekly: 4
+    keep-monthly: 6
+    keep-yearly: 1
+  # The Talos VMs are rebuildable from Terraform and the Talos configs; the
+  # last three nightly backups are a short safety net, not history.
+  talos-prune:
+    store: datastore01
+    ns: talos
+    schedule: "05:30"
+    comment: "Talos VM backups (namespace talos): last 3 only"
+    keep-last: 3
+  offsite-prune:
+    store: offsite
+    schedule: "06:30"
+    comment: "Retention for the offsite copy"
+    keep-daily: 7
+    keep-weekly: 4
+    keep-monthly: 3
+
+verify:
+  v-81c9c3a4-0bdc:
+    store: datastore01
+    ns: ""
+    # After the container (02:30) and Talos (03:00) backups.
+    schedule: "04:30"
+    ignore-verified: true
+    outdated-after: 30
+  # Re-verifies every snapshot each run: a sync copies the verify state from
+  # datastore01, so a "verified" mark on offsite may only describe the source.
+  # A full pass takes minutes.
+  offsite-verify:
+    store: offsite
+    # After the 05:00 sync, before zerobyte uploads to Google Drive at 07:00.
+    schedule: "05:30"
+    comment: "Daily full verify of the offsite copy (what zerobyte uploads to Google)"
+    ignore-verified: false
+
+sync:
+  # Local pull (no remote): datastore01 -> offsite. remove-vanished stays
+  # off so a delete on datastore01 never reaches the off-site copy;
+  # offsite-prune owns retention there, and a retired guest's group is
+  # removed by hand (host-lifecycle decommission).
+  offsite-lxc:
+    store: offsite
+    remote-store: datastore01
+    schedule: "05:00"
+    comment: "LXC backups to the offsite store; zerobyte uploads it at 07:00. Excludes gitlab-runner (411)."
+    group-filter:
+      - "type:ct"
+      - "exclude:group:ct/411"
+    remove-vanished: false
+    transfer-last: 7

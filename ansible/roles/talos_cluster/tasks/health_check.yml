@@ -1,0 +1,31 @@
+---
+# ============================================================================
+# Talos Cluster Role - Node Health Check
+# ============================================================================
+# Performs health check on a Talos node.
+#
+# Variables:
+#   - talos_cluster_node_ip: IP address of node to check (required)
+#   - talos_cluster_health_wait_timeout: Timeout for health check (default: 5m)
+#
+# Usage:
+#   - ansible.builtin.include_role:
+#       name: talos_cluster
+#       tasks_from: health_check
+#     vars:
+#       talos_cluster_node_ip: "{{ ansible_host }}"
+# ============================================================================
+
+- name: Check health of node {{ talos_cluster_node_ip }}
+  ansible.builtin.command:
+    cmd: >
+      talosctl health
+      --talosconfig {{ talos_config_file }}
+      --nodes {{ talos_cluster_node_ip }}
+      --wait-timeout {{ talos_cluster_health_wait_timeout | default('5m') }}
+  environment:
+    TALOSCONFIG: "{{ talos_config_file }}"
+  register: talos_cluster_health_result
+  changed_when: false
+  failed_when: talos_cluster_health_result.rc != 0
+  delegate_to: localhost

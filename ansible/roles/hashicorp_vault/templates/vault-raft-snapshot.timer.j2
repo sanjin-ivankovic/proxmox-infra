@@ -1,0 +1,10 @@
+# {{ ansible_managed }}
+[Unit]
+Description=Nightly Vault Raft snapshot, before the PBS container backup
+
+[Timer]
+OnCalendar={{ hashicorp_vault_snapshot_on_calendar }}
+Persistent=true
+
+[Install]
+WantedBy=timers.target

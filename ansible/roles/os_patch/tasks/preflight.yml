@@ -1,0 +1,73 @@
+---
+# ansible/roles/os_patch/tasks/preflight.yml
+# Read-only gates. Nothing here may change state — it also runs under --check.
+
+- name: Preflight | Check connectivity
+  ansible.builtin.ping:
+  changed_when: false
+
+# Read the filesystem holding / directly: container overlayfs roots are absent
+# from ansible_facts.mounts, and apt's headroom is about that filesystem anyway.
+- name: Preflight | Measure free space on /
+  ansible.builtin.command: df -Pm /
+  register: os_patch_df
+  changed_when: false
+  check_mode: false
+
+- name: Preflight | Assert free disk space on /
+  vars:
+    os_patch_free_mb: "{{ os_patch_df.stdout_lines[-1].split()[3] | int }}"
+  ansible.builtin.assert:
+    that:
+      - os_patch_free_mb | int >= os_patch_min_free_disk_mb | int
+    fail_msg: >-
+      Only {{ os_patch_free_mb }} MB free on / — need
+      {{ os_patch_min_free_disk_mb }} MB to patch safely.
+    success_msg: "{{ os_patch_free_mb }} MB free on /"
+
+- name: Preflight | Collect failed systemd units
+  ansible.builtin.command: systemctl list-units --state=failed --no-legend --plain
+  register: os_patch_failed_units_before_raw
+  changed_when: false
+  check_mode: false
+
+# A unit whose file a package upgrade removed stays listed as failed with LOAD
+# not-found until reset-failed. It has nothing left to run, so it neither
+# blocks a host nor counts as a failure caused by patching.
+- name: Preflight | Drop failed units whose unit file is gone
+  ansible.builtin.set_fact:
+    os_patch_failed_units_before: >-
+      {{ os_patch_failed_units_before_raw.stdout_lines
+         | reject('search', '^\\S+\\s+not-found\\s') | list }}
+
+- name: Preflight | Assert no failed units
+  ansible.builtin.assert:
+    that:
+      - os_patch_failed_units_before | length == 0
+    fail_msg: >-
+      {{ os_patch_failed_units_before | length }} failed unit(s)
+      before patching: {{ os_patch_failed_units_before | join(', ') }}
+    success_msg: no failed units
+  when: os_patch_fail_on_failed_units | bool
+
+- name: Preflight | Detect Docker
+  ansible.builtin.command: docker info --format '{% raw %}{{.ServerVersion}}{% endraw %}'
+  register: os_patch_docker_info
+  changed_when: false
+  failed_when: false
+  check_mode: false
+
+- name: Preflight | Record running containers
+  ansible.builtin.command: docker ps --format '{% raw %}{{.Names}}{% endraw %}'
+  register: os_patch_docker_ps_before
+  changed_when: false
+  check_mode: false
+  when:
+    - os_patch_verify_docker | bool
+    - os_patch_docker_info.rc == 0
+
+- name: Preflight | Record pre-patch state
+  ansible.builtin.set_fact:
+    os_patch_kernel_before: "{{ ansible_facts['kernel'] }}"
+    os_patch_docker_before: >-
+      {{ (os_patch_docker_ps_before.stdout_lines | default([])) | sort }}

@@ -1,0 +1,78 @@
+---
+# Argument specification for the monitoring_agent role.
+# Defaults here MUST match defaults/main.yml.
+argument_specs:
+  main:
+    short_description: Install node_exporter, cAdvisor and Alloy for Prometheus and Loki
+    description:
+      - Installs pinned node_exporter and cAdvisor release binaries with
+        systemd units so the in-cluster Prometheus can scrape the host and its
+        Docker containers.
+      - Optionally publishes the newest Talos etcd snapshot age through the
+        textfile collector (semaphore only).
+    author:
+      - Maintainer Name
+    options:
+      monitoring_agent_node_exporter_version:
+        type: str
+        required: false
+        default: "1.12.1"
+        description: node_exporter release to install (no leading "v").
+      monitoring_agent_cadvisor_version:
+        type: str
+        required: false
+        default: "0.60.6"
+        description: cAdvisor release to install (no leading "v").
+      monitoring_agent_install_dir:
+        type: path
+        required: false
+        default: /opt/monitoring-agent
+        description: Directory holding one subdirectory or file per release.
+      monitoring_agent_node_exporter_port:
+        type: int
+        required: false
+        default: 9100
+        description: node_exporter listen port.
+      monitoring_agent_cadvisor_port:
+        type: int
+        required: false
+        default: 9338
+        description: cAdvisor listen port (8080 is taken on several hosts).
+      monitoring_agent_textfile_dir:
+        type: path
+        required: false
+        default: /var/lib/node_exporter/textfile
+        description: node_exporter textfile collector directory.
+      monitoring_agent_etcd_backup_dir:
+        type: str
+        required: false
+        default: ""
+        description:
+          - Directory of Talos etcd snapshots to report on. Empty disables the
+            etcd backup age timer.
+      monitoring_agent_alloy_version:
+        type: str
+        required: false
+        default: "1.21.1"
+        description: Alloy release to install (no leading "v").
+      monitoring_agent_alloy_port:
+        type: int
+        required: false
+        default: 12345
+        description: Alloy HTTP port (UI and its own metrics).
+      monitoring_agent_loki_push_url:
+        type: str
+        required: false
+        default: https://loki.example.com/loki/api/v1/push
+        description: Loki push endpoint (basic-auth route on traefik-lan).
+      monitoring_agent_loki_push_user:
+        type: str
+        required: false
+        default: alloy
+        description: Basic-auth user on the push route.
+      monitoring_agent_loki_push_password:
+        type: str
+        required: false
+        default: "{{ kv_monitoring.loki_push_password }}"
+        no_log: true
+        description: Basic-auth password; from Ansible Vault.

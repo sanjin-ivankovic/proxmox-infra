@@ -1,0 +1,37 @@
+---
+# ansible/roles/monitoring_agent/defaults/main.yml
+#
+# Installs node_exporter and cAdvisor (release binaries + systemd units) so
+# Prometheus in the cluster (argo-apps kube-prometheus-stack) can scrape the
+# host and its Docker containers. Core-zone hosts are reachable because of
+# the `monitoring_exporters` port group in terraform/unifi.
+
+# Pinned for reproducibility; Renovate bumps both (renovate.json regex
+# managers). No leading "v".
+monitoring_agent_node_exporter_version: "1.12.1"
+monitoring_agent_cadvisor_version: "0.60.6"
+
+monitoring_agent_install_dir: /opt/monitoring-agent
+
+monitoring_agent_node_exporter_port: 9100
+# 8080 (cAdvisor's default) is taken by gitlab, bitwarden and paperless-ngx.
+monitoring_agent_cadvisor_port: 9338
+
+# node_exporter reads *.prom files from here (textfile collector).
+monitoring_agent_textfile_dir: /var/lib/node_exporter/textfile
+
+# When set, a root timer publishes the newest file's mtime in this directory
+# as talos_etcd_backup_newest_timestamp_seconds. node_exporter cannot read it
+# itself: the backups are 0600 under a 0700 directory. Set on semaphore only.
+monitoring_agent_etcd_backup_dir: ""
+
+# Alloy ships the journal and Docker container logs to Loki through the
+# basic-auth push route (argo-apps apps/infra/loki ingress/). Same version
+# as the cluster DaemonSet (argo-apps apps/infra/alloy chart appVersion).
+monitoring_agent_alloy_version: "1.21.3"
+monitoring_agent_alloy_port: 12345
+monitoring_agent_loki_push_url: https://loki.example.com/loki/api/v1/push
+monitoring_agent_loki_push_user: alloy
+# The htpasswd in Vault kv/k8s/monitoring/loki-push-auth (Loki's push route)
+# must match this password.
+monitoring_agent_loki_push_password: "{{ kv_monitoring.loki_push_password }}"

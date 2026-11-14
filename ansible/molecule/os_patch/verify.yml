@@ -1,0 +1,20 @@
+---
+- name: Verify
+  hosts: all
+  become: true
+  tasks:
+    - name: Read the latest report
+      ansible.builtin.slurp:
+        src: /var/log/os-patch/latest.json
+      register: os_patch_latest
+
+    - name: Assert the report is valid and describes this host
+      vars:
+        report: "{{ os_patch_latest.content | b64decode | from_json }}"
+      ansible.builtin.assert:
+        that:
+          - report.host == inventory_hostname
+          - report.started | length > 0
+          - report.finished | length > 0
+          - report.kernel_before | length > 0
+        success_msg: "report for {{ report.host }} is well-formed"

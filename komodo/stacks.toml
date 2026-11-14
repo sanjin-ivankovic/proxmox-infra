@@ -1,0 +1,312 @@
+# ============================================================================
+# Komodo Resource Sync — Stacks (one per service)
+# ============================================================================
+# Each [[stack]] pins a service to its server, points at its compose file in
+# this repo, and supplies env. Env uses [[NAME]] interpolation:
+#   - [[TZ]] / [[APPDATA_DIR]] / [[REGISTRY_IMAGE]] -> Komodo Variables (committed, non-secret)
+#   - [[BW_DB_PASSWORD]] etc.                       -> periphery [secrets] (host-local, from Vault)
+#
+# DEPLOY MODEL (komodo/procedures.toml, GitOps Apply)
+# ---------------------------------------------------
+# - tags: every stack carries `iac` (the sync's match_tags; an untagged
+#   resource is silently ignored by the sync) and exactly one wave tag:
+#   `wave-1` for primaries and single-node stacks, `wave-2` for HA
+#   secondaries. scripts/komodo_lint.py --strict enforces both.
+# - deploy = true: the sync stage deploys a new stack and any stack whose
+#   Komodo config changed (environment, file_paths, server, ...). `after`
+#   orders those deploys within an HA pair.
+# - config_files: every repo file a compose bind-mounts, with
+#   requires = "Restart". The wave stages restart the service when one
+#   changes; a redeploy alone keeps a single-file mount on the old version.
+# - Exception, tag manual-deploy (vault): no wave tag, deploy = false, and
+#   requires = "None", so nothing restarts it unattended.
+# - auto_pull is Komodo's default (true): every deploy pulls the pinned tag,
+#   so a rebuilt self-built image is picked up by the next deploy.
+# - HA pairs share one compose (services/pihole/, services/technitium/);
+#   NODE and the other per-node values are in each stack's environment.
+#   project_name is the pair name. When a stack's project name differs from
+#   the one it last deployed, Komodo runs `compose down` on the old project
+#   first; `--remove-orphans` cannot replace that, because compose removes
+#   orphans in parallel with creating the renamed services and hits their
+#   container names.
+# - extra_args --wait on the HA pairs: a deploy returns once its services
+#   are healthy, so the `after` round that follows one second later starts
+#   with the first member serving. `after` does not stop on a failed deploy
+#   (DeployStack reports the failure but the sync's next round still runs).
+#
+# Image tags are pinned in the compose files and bumped through Renovate.
+#
+# NOTE: each `environment` block below maps a service's docker-compose ${VARS}
+# to their sources — non-secret values inline or in variables.toml, secret
+# names resolved from the host's periphery [secrets] (host_vars/<svc>.yml).
+# ============================================================================
+
+# ----------------------------------------------------------------------------
+# DNS — Technitium (authoritative HA pair)
+# ----------------------------------------------------------------------------
+[[stack]]
+name = "technitium-1"
+tags = ["iac", "wave-1", "dns"]
+deploy = true
+[stack.config]
+server = "technitium-1"
+linked_repo = "proxmox-infra"
+project_name = "technitium"
+file_paths = ["services/technitium/docker-compose.yml"]
+extra_args = ["--wait", "--wait-timeout=180"]
+environment = """
+NODE = 1
+TZ = [[TZ]]
+APPDATA_DIR = [[APPDATA_DIR]]
+DNS_SERVER_DOMAIN = ns1.example.com
+DNS_SERVER_ADMIN_PASSWORD = [[DNS_SERVER_ADMIN_PASSWORD]]
+"""
+
+[[stack]]
+name = "technitium-2"
+tags = ["iac", "wave-2", "dns"]
+deploy = true
+after = ["technitium-1"]
+[stack.config]
+server = "technitium-2"
+linked_repo = "proxmox-infra"
+project_name = "technitium"
+file_paths = ["services/technitium/docker-compose.yml"]
+extra_args = ["--wait", "--wait-timeout=180"]
+environment = """
+NODE = 2
+TZ = [[TZ]]
+APPDATA_DIR = [[APPDATA_DIR]]
+DNS_SERVER_DOMAIN = ns2.example.com
+DNS_SERVER_ADMIN_PASSWORD = [[DNS_SERVER_ADMIN_PASSWORD]]
+"""
+
+# ----------------------------------------------------------------------------
+# DNS — filtering HA pair: Pi-hole (docs/NETWORK.md).
+# ----------------------------------------------------------------------------
+[[stack]]
+name = "pihole-1"
+tags = ["iac", "wave-1", "dns"]
+deploy = true
+[stack.config]
+server = "pihole-1"
+linked_repo = "proxmox-infra"
+project_name = "pihole"
+file_paths = ["services/pihole/docker-compose.yml"]
+extra_args = ["--wait", "--wait-timeout=180"]
+config_files = [
+  { path = "services/pihole/pihole-updatelists.conf", services = ["pihole"], requires = "Restart" },
+  { path = "services/pihole/lists/allowlist.txt", services = ["pihole"], requires = "Restart" },
+  { path = "services/pihole/lists/blocklists.txt", services = ["pihole"], requires = "Restart" },
+  { path = "services/pihole/lists/regex-deny.txt", services = ["pihole"], requires = "Restart" },
+  { path = "docker/unbound/data/opt/unbound/etc/unbound/unbound.conf", services = ["unbound"], requires = "Restart" },
+  { path = "docker/unbound/data/opt/unbound/etc/unbound/forward-records.conf", services = ["unbound"], requires = "Restart" },
+]
+environment = """
+NODE = 1
+CRONTAB_STRING = 15 4 * * *
+TZ = [[TZ]]
+APPDATA_DIR = [[APPDATA_DIR]]
+REGISTRY_IMAGE = [[REGISTRY_IMAGE]]
+WEB_PASSWORD = [[WEB_PASSWORD]]
+"""
+
+[[stack]]
+name = "pihole-2"
+tags = ["iac", "wave-2", "dns"]
+deploy = true
+after = ["pihole-1"]
+[stack.config]
+server = "pihole-2"
+linked_repo = "proxmox-infra"
+project_name = "pihole"
+file_paths = ["services/pihole/docker-compose.yml"]
+extra_args = ["--wait", "--wait-timeout=180"]
+config_files = [
+  { path = "services/pihole/pihole-updatelists.conf", services = ["pihole"], requires = "Restart" },
+  { path = "services/pihole/lists/allowlist.txt", services = ["pihole"], requires = "Restart" },
+  { path = "services/pihole/lists/blocklists.txt", services = ["pihole"], requires = "Restart" },
+  { path = "services/pihole/lists/regex-deny.txt", services = ["pihole"], requires = "Restart" },
+  { path = "docker/unbound/data/opt/unbound/etc/unbound/unbound.conf", services = ["unbound"], requires = "Restart" },
+  { path = "docker/unbound/data/opt/unbound/etc/unbound/forward-records.conf", services = ["unbound"], requires = "Restart" },
+]
+environment = """
+NODE = 2
+CRONTAB_STRING = 45 4 * * *
+TZ = [[TZ]]
+APPDATA_DIR = [[APPDATA_DIR]]
+REGISTRY_IMAGE = [[REGISTRY_IMAGE]]
+WEB_PASSWORD = [[WEB_PASSWORD]]
+"""
+
+# ----------------------------------------------------------------------------
+# GitLab CE (self-hosted Git forge — serves source.example.com)
+# ----------------------------------------------------------------------------
+# The full instance config (external_url, ssh port, memory tuning) lives inline
+# in services/gitlab/docker-compose.yml as GITLAB_OMNIBUS_CONFIG (non-secret),
+# so only TZ/APPDATA_DIR + the root-password secret are supplied here.
+[[stack]]
+name = "gitlab"
+tags = ["iac", "wave-1", "git"]
+deploy = true
+[stack.config]
+server = "gitlab"
+linked_repo = "proxmox-infra"
+file_paths = ["services/gitlab/docker-compose.yml"]
+config_files = [
+  { path = "services/gitlab/omnibus_config.rb", services = ["gitlab"], requires = "Restart" },
+]
+environment = """
+TZ = [[TZ]]
+APPDATA_DIR = [[APPDATA_DIR]]
+GITLAB_ROOT_PASSWORD = [[GITLAB_ROOT_PASSWORD]]
+"""
+
+# ----------------------------------------------------------------------------
+# GitLab Runner (dedicated CI host)
+# ----------------------------------------------------------------------------
+# CI_SERVER_URL is non-secret (kept inline). GitLab serves source.example.com.
+[[stack]]
+name = "gitlab-runner"
+tags = ["iac", "wave-1", "ci"]
+deploy = true
+[stack.config]
+server = "gitlab-runner"
+linked_repo = "proxmox-infra"
+file_paths = ["services/gitlab-runner/docker-compose.yml"]
+environment = """
+TZ = [[TZ]]
+APPDATA_DIR = [[APPDATA_DIR]]
+CI_SERVER_URL = https://source.example.com
+GITLAB_RUNNER_TOKEN = [[GITLAB_RUNNER_TOKEN]]
+"""
+
+# ----------------------------------------------------------------------------
+# Bitwarden (password manager)
+# ----------------------------------------------------------------------------
+[[stack]]
+name = "bitwarden"
+tags = ["iac", "wave-1", "password-manager"]
+deploy = true
+[stack.config]
+server = "bitwarden"
+linked_repo = "proxmox-infra"
+file_paths = ["services/bitwarden/docker-compose.yml"]
+config_files = [
+  { path = "services/bitwarden/scripts/backup-entrypoint.sh", services = ["backup"], requires = "Restart" },
+  { path = "services/bitwarden/scripts/backup.sh", services = ["backup"], requires = "Restart" },
+]
+environment = """
+TZ = [[TZ]]
+APPDATA_DIR = [[APPDATA_DIR]]
+BW_DOMAIN = bitwarden.example.com
+BW_ENABLE_ADMIN = true
+BW_ENABLE_SSO = false
+BW_DISABLE_REGISTRATION = false
+BW_ADMIN_EMAIL = admin@example.com
+BW_DB_PROVIDER = postgresql
+BW_DB_SERVER = db
+BW_DB_DATABASE = bitwarden_vault
+BW_DB_USERNAME = bitwarden
+BW_DB_PASSWORD = [[BW_DB_PASSWORD]]
+BW_INSTALLATION_ID = [[BW_INSTALLATION_ID]]
+BW_INSTALLATION_KEY = [[BW_INSTALLATION_KEY]]
+BW_SMTP_HOST = smtp
+BW_SMTP_PORT = 25
+BW_SMTP_SSL = false
+BW_SMTP_USERNAME =
+BW_SMTP_PASSWORD =
+BW_SMTP_REPLY_TO = noreply@vault.example.com
+BACKUP_CRON_SCHEDULE = 0 2 * * *
+BACKUP_ON_STARTUP = false
+BACKUP_LOCAL_RETENTION = 7
+BACKUP_NAS_TARGET =
+BACKUP_NAS_RETENTION = 14
+BACKUP_R2_BUCKET = bitwarden-backups
+BACKUP_R2_ENDPOINT = https://04376f2b0f3e66492fef38704902782b.r2.cloudflarestorage.com
+BACKUP_R2_ACCESS_KEY = [[BACKUP_R2_ACCESS_KEY]]
+BACKUP_R2_SECRET_KEY = [[BACKUP_R2_SECRET_KEY]]
+BACKUP_R2_RETENTION = 30
+"""
+
+# ----------------------------------------------------------------------------
+# Paperless-ngx (document management)
+# ----------------------------------------------------------------------------
+[[stack]]
+name = "paperless-ngx"
+tags = ["iac", "wave-1", "document-management"]
+deploy = true
+[stack.config]
+server = "paperless-ngx"
+linked_repo = "proxmox-infra"
+file_paths = ["services/paperless-ngx/docker-compose.yml"]
+environment = """
+APPDATA_DIR = [[APPDATA_DIR]]
+POSTGRES_DB = paperless
+POSTGRES_USER = paperless
+POSTGRES_PASSWORD = [[POSTGRES_PASSWORD]]
+USERMAP_UID = 1000
+USERMAP_GID = 1000
+PAPERLESS_URL = https://paperless.example.com
+PAPERLESS_SECRET_KEY = [[PAPERLESS_SECRET_KEY]]
+PAPERLESS_TIME_ZONE = [[TZ]]
+PAPERLESS_OCR_LANGUAGE = eng
+PAPERLESS_OCR_LANGUAGES = deu srp srp_latn
+PAPERLESS_ADMIN_USER = maintainer
+PAPERLESS_ADMIN_MAIL = maintainer@example.com
+PAPERLESS_ADMIN_PASSWORD = [[PAPERLESS_ADMIN_PASSWORD]]
+"""
+
+# ----------------------------------------------------------------------------
+# Semaphore (Ansible UI)
+# ----------------------------------------------------------------------------
+[[stack]]
+name = "semaphore"
+tags = ["iac", "wave-1", "ansible"]
+deploy = true
+[stack.config]
+server = "semaphore"
+linked_repo = "proxmox-infra"
+file_paths = ["services/semaphore/docker-compose.yml"]
+config_files = [
+  { path = "services/semaphore/known_hosts", services = ["semaphore"], requires = "Restart" },
+]
+environment = """
+REGISTRY_IMAGE = [[REGISTRY_IMAGE]]
+APPDATA_DIR = [[APPDATA_DIR]]
+TZ = [[TZ]]
+SEMAPHORE_ADMIN = admin
+SEMAPHORE_ADMIN_NAME = Admin
+SEMAPHORE_ADMIN_EMAIL = admin@example.com
+SEMAPHORE_ADMIN_PASSWORD = [[SEMAPHORE_ADMIN_PASSWORD]]
+SEMAPHORE_ANSIBLE_VAULT_PASSWORD = [[SEMAPHORE_ANSIBLE_VAULT_PASSWORD]]
+SEMAPHORE_VAULT_SECRET_ID = [[SEMAPHORE_VAULT_SECRET_ID]]
+SEMAPHORE_PVE_API_URL = https://10.105.0.4:8006/api2/json
+SEMAPHORE_PVE_API_TOKEN_ID = [[SEMAPHORE_PVE_API_TOKEN_ID]]
+SEMAPHORE_PVE_API_TOKEN_SECRET = [[SEMAPHORE_PVE_API_TOKEN_SECRET]]
+SEMAPHORE_OIDC_CLIENT_SECRET = [[SEMAPHORE_OIDC_CLIENT_SECRET]]
+"""
+
+# ----------------------------------------------------------------------------
+# HashiCorp Vault (secret store)
+# ----------------------------------------------------------------------------
+# Every container restart seals Vault until it is unsealed by hand
+# (docs/VAULT.md). manual-deploy (checked by scripts/komodo_lint.py): no wave
+# tag and deploy = false, so GitOps Apply never redeploys it, and its
+# config_files change does not restart it. Deploy by hand with
+# `make komodo-deploy STACK=vault`, then unseal.
+[[stack]]
+name = "vault"
+tags = ["iac", "secrets", "manual-deploy"]
+deploy = false
+[stack.config]
+server = "vault"
+linked_repo = "proxmox-infra"
+file_paths = ["services/vault/docker-compose.yml"]
+config_files = [
+  { path = "services/vault/vault.hcl", services = ["vault"], requires = "None" },
+]
+environment = """
+APPDATA_DIR = [[APPDATA_DIR]]
+TZ = [[TZ]]
+"""

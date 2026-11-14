@@ -1,0 +1,25 @@
+# Trivy findings intentionally ignored for the proxmox-infra repo.
+#
+# One ID per line — CVE IDs for the image scan in build:<image> (before the
+# push), Trivy/AVD misconfig IDs for the Terraform scan (scan:trivy-iac).
+# Document WHY inline so an ignore is auditable. Parallels
+# .config/.gitleaksignore — repo-local, passed to both via --ignorefile. The
+# scans block on CRITICAL findings, so every entry carries an exp: date that
+# forces a re-triage.
+
+# semaphore: brotli-libs 1.1.0-r2 in upstream semaphoreui/semaphore's Alpine
+# 3.21 base. 3.21 is end of life, so no fixed package will reach its repository.
+# Clears when upstream moves to a newer Alpine (Renovate bumps the image).
+CVE-2026-111497 exp:2027-01-31
+
+# semaphore: the certifi vendored inside the Ansible venv's own pip (pip
+# 26.2.1), used only when pip installs something, which the runner never does.
+# The venv's runtime certifi is already 2026.10.18. pip 26.3 (2026-11-02)
+# vendors a fixed certifi; pin it once it passes the two-week age rule.
+GHSA-6q48-6c7w-9gw2 exp:2026-11-30
+
+# ci-base gitleaks 8.30.1 (the newest release) is built with Go 1.24.11.
+# CVE-2025-68121 is in crypto/tls session resumption; CI runs gitleaks only
+# over local git history, which opens no TLS connection. Clears when a
+# gitleaks release ships a fixed Go (Renovate bumps GITLEAKS_VERSION).
+CVE-2025-68121 exp:2027-01-31

@@ -1,0 +1,25 @@
+---
+# ansible/inventory/host_vars/gitlab-runner.yml
+# Komodo Periphery secrets for gitlab-runner, from kv/proxmox-infra/gitlab-runner
+# (group_vars/all/secrets.yml), rendered into the host's periphery.config.toml
+# by `make -C ansible periphery-secrets HOST=gitlab-runner`. Stacks reference them as
+# [[NAME]].
+
+komodo_periphery_secrets:
+  # Runner authentication token (glrt-…) created in the GitLab UI
+  # (Admin → CI/CD → Runners).
+  GITLAB_RUNNER_TOKEN: "{{ kv_gitlab_runner.runner_token }}"
+
+# The runner uses the Docker executor and bind-mounts the host's
+# /var/run/docker.sock. A Docker upgrade/restart recreates that socket at a new
+# inode, leaving the long-lived container pinned to the old one ("Cannot connect
+# to the Docker daemon"). This drop-in (common_docker role) restarts the runner
+# after dockerd starts so its socket mount re-resolves.
+common_docker_restart_containers_on_start:
+  - gitlab-runner
+
+# CI leaves pulled job images, build cache and per-project cache volumes
+# behind. Prune weekly what no container uses; the runner labels its cache
+# volumes, so only those volumes are pruned (CI caches start cold once a week).
+common_docker_prune_enabled: true
+common_docker_prune_volume_label: com.gitlab.gitlab-runner.managed=true

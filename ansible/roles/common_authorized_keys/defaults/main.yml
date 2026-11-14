@@ -1,0 +1,15 @@
+---
+# ansible/roles/common_authorized_keys/defaults/main.yml
+
+# Account whose authorized_keys is managed.
+common_authorized_keys_user: "{{ user | default('maintainer') }}"
+
+# Keys to authorize. Each item: {comment, key, state}.
+# `comment` is the match key for removal — authorized_key replaces an existing
+# entry with the same key material, so `state: absent` needs the exact key.
+common_authorized_keys_keys: []
+
+# When true, keys NOT listed above are REMOVED from authorized_keys. Leaving
+# this false is what keeps the per-host Terraform keys (and any operator key)
+# in place alongside the automation key.
+common_authorized_keys_exclusive: false

@@ -1,0 +1,10 @@
+---
+# ansible/inventory/host_vars/gitlab.yml
+# Komodo Periphery secrets for gitlab, from kv/proxmox-infra/gitlab
+# (group_vars/all/secrets.yml), rendered into the host's periphery.config.toml
+# by `make -C ansible periphery-secrets HOST=gitlab`. Stacks reference them as
+# [[NAME]].
+
+komodo_periphery_secrets:
+  # First-boot root password seed for GitLab CE.
+  GITLAB_ROOT_PASSWORD: "{{ kv_gitlab.root_password }}"
