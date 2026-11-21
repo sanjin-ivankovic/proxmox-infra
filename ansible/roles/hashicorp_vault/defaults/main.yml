@@ -1,0 +1,51 @@
+---
+# ansible/roles/hashicorp_vault/defaults/main.yml
+
+# Host side of the Vault stack (services/vault): the Let's Encrypt
+# certificate Vault serves, obtained by lego with a Cloudflare DNS-01
+# challenge and renewed by a systemd timer.
+
+hashicorp_vault_domain: vault.example.com
+hashicorp_vault_acme_email: admin@example.com
+
+# The Komodo stack's bind mounts live here (APPDATA_DIR in
+# komodo/variables.toml).
+hashicorp_vault_appdata_dir: /srv/docker/appdata/vault
+
+# Read from the compose file so the image pin has one source (Renovate bumps
+# it there). The role runs `id` in this image to learn the vault user's
+# uid/gid, which the image does not fix.
+hashicorp_vault_compose_file: "{{ playbook_dir }}/../../../services/vault/docker-compose.yml"
+hashicorp_vault_image: "{{ (lookup('ansible.builtin.file', hashicorp_vault_compose_file) | from_yaml).services.vault.image }}"
+
+hashicorp_vault_lego_version: "5.6.0"
+hashicorp_vault_lego_sha256: f02fc11b6f56b97e387fa7caa0268f86f5a336953b22458e6430e4651fea439a
+
+# Cloudflare API token, Zone:Read + DNS:Edit on example.com only.
+hashicorp_vault_cloudflare_dns_token: "{{ vault_cloudflare_dns_token }}"
+
+# Technitium is authoritative for example.com inside the network, so lego's
+# propagation checks would never see the TXT record created at Cloudflare.
+# Skip them and wait instead.
+hashicorp_vault_dns_propagation_wait: 90s
+
+hashicorp_vault_renew_on_calendar: "*-*-* 03:40:00"
+
+# node_exporter's textfile collector (monitoring_agent_textfile_dir).
+hashicorp_vault_textfile_dir: /var/lib/node_exporter/textfile
+
+# Days of rotated audit logs kept under logs/ (vault_audit.file in
+# terraform/vault writes /vault/logs/audit.log).
+hashicorp_vault_audit_log_keep_days: 14
+
+# Nightly Raft snapshot with the raft-snapshot AppRole (terraform/vault).
+# 02:00 Berlin time (the host runs in UTC), before the 02:30 PBS backup of
+# the LXC, which carries the files offsite. The RoleID is an identifier
+# (`make -C terraform/vault output`). The SecretID is a credential and stays
+# in the Ansible vault: the timer must log in to Vault, so it cannot read
+# its own credential from there.
+hashicorp_vault_snapshot_role_id: 8aef9abb-8b8b-7eaa-059b-294943454dae
+hashicorp_vault_snapshot_secret_id: "{{ vault_hashicorp_vault_snapshot_secret_id }}"
+hashicorp_vault_snapshot_dir: /var/backups/vault
+hashicorp_vault_snapshot_keep: 7
+hashicorp_vault_snapshot_on_calendar: "*-*-* 02:00:00 Europe/Berlin"

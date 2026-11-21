@@ -1,0 +1,23 @@
+---
+# ansible/roles/monitoring_agent/meta/main.yml
+
+galaxy_info:
+  role_name: monitoring_agent
+  author: Maintainer Name
+  description: Install node_exporter, cAdvisor and Alloy (binaries + systemd) for Prometheus and Loki
+  license: MIT
+  min_ansible_version: '2.9'
+  platforms:
+    - name: Debian
+      versions:
+        - 'bookworm'
+        - 'trixie'
+  galaxy_tags:
+    - monitoring
+    - prometheus
+
+# Empty so a version bump or config change runs this role alone. cAdvisor
+# needs Docker; tasks/preflight.yml fails fast on a host without it.
+dependencies: []
+
+allow_duplicates: false

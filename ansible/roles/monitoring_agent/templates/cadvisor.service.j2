@@ -1,0 +1,24 @@
+## {{ ansible_managed }}
+[Unit]
+Description=cAdvisor (Docker container metrics)
+After=network-online.target docker.service
+Wants=network-online.target
+Requires=docker.service
+
+[Service]
+Type=simple
+# Reads every container's cgroup and the Docker socket, so it runs as root.
+# The disabled metric groups and the 30s housekeeping keep its memory near
+# 100Mi; Prometheus scrapes every 30s anyway.
+ExecStart=/usr/local/bin/cadvisor \
+  --port={{ monitoring_agent_cadvisor_port }} \
+  --docker_only=true \
+  --housekeeping_interval=30s \
+  --store_container_labels=false \
+  --whitelisted_container_labels=com.docker.compose.project,com.docker.compose.service \
+  --disable_metrics=advtcp,cpu_topology,cpuset,disk,diskIO,hugetlb,percpu,process,referenced_memory,resctrl,sched,tcp,udp
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

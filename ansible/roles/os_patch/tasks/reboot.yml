@@ -1,0 +1,16 @@
+---
+# ansible/roles/os_patch/tasks/reboot.yml
+
+- name: Reboot | Reboot the host
+  ansible.builtin.reboot:
+    reboot_timeout: "{{ os_patch_reboot_timeout }}"
+    post_reboot_delay: "{{ os_patch_post_reboot_delay }}"
+    test_command: uptime
+  register: os_patch_reboot_result
+
+- name: Reboot | Re-gather facts
+  ansible.builtin.setup:
+
+- name: Reboot | Record post-reboot kernel
+  ansible.builtin.set_fact:
+    os_patch_kernel_after: "{{ ansible_facts['kernel'] }}"

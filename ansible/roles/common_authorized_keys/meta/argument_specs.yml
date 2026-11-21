@@ -1,0 +1,60 @@
+---
+# Argument specification for the common_authorized_keys role.
+# Validated at the start of role execution; defaults here MUST match
+# defaults/main.yml.
+argument_specs:
+  main:
+    short_description: Manage SSH authorized_keys for a service account
+    description:
+      - Authorizes a declared list of public keys on a host account via
+        M(ansible.posix.authorized_key).
+      - Exists because C(common_users) only copies root's C(authorized_keys)
+        at bootstrap, and Terraform's C(deploy_public_keys) sits inside
+        C(initialization), which the LXC module lists in C(ignore_changes) —
+        so neither can add a key to an already-provisioned host.
+    author:
+      - Maintainer Name
+    options:
+      common_authorized_keys_user:
+        type: str
+        required: false
+        default: maintainer
+        description:
+          - Account whose C(~/.ssh/authorized_keys) is managed. Defaults to the
+            inventory-wide C(user).
+      common_authorized_keys_keys:
+        type: list
+        elements: dict
+        required: false
+        default: []
+        description:
+          - Public keys to authorize.
+        options:
+          comment:
+            type: str
+            required: true
+            description:
+              - Identifying comment written alongside the key; also the loop
+                label in play output.
+          key:
+            type: str
+            required: true
+            description:
+              - The full public key material (e.g. C(ssh-ed25519 AAAA...)).
+          state:
+            type: str
+            required: false
+            default: present
+            choices: [present, absent]
+            description:
+              - Whether the key should be authorized or removed.
+      common_authorized_keys_exclusive:
+        type: bool
+        required: false
+        default: false
+        description:
+          - When true, remove any key not listed in
+            C(common_authorized_keys_keys). Left false so per-host Terraform
+            keys survive alongside the automation key. Enabling it with an
+            empty key list would lock every operator out, which the role
+            asserts against.

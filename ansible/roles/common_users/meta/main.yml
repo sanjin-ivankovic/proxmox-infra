@@ -1,0 +1,30 @@
+---
+# ansible/roles/common_users/meta/main.yml
+
+galaxy_info:
+  role_name: common_users
+  author: Maintainer Name
+  description: User creation and sudo configuration for Debian/Ubuntu
+  license: MIT
+  min_ansible_version: '2.9'
+  platforms:
+    - name: Debian
+      versions:
+        - 'trixie'
+    - name: Ubuntu
+      versions:
+        - 'noble'
+  galaxy_tags:
+    - users
+    - sudo
+    - security
+    - debian
+    - ubuntu
+
+# Empty: playbooks list the base roles explicitly (bootstrap.yml runs common_system, which installs sudo, first).
+dependencies: []
+
+collections:
+  - community.general
+
+allow_duplicates: false

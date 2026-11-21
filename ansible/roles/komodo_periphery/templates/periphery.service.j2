@@ -1,0 +1,18 @@
+## {{ ansible_managed }}
+[Unit]
+Description=Komodo Periphery agent
+After=network-online.target docker.service
+Wants=network-online.target
+Requires=docker.service
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/periphery
+Environment=PERIPHERY_CONFIG_PATHS={{ komodo_periphery_root_dir }}/periphery.config.toml
+Restart=on-failure
+RestartSec=5
+# Periphery manages docker on this host, so it runs as root.
+User=root
+
+[Install]
+WantedBy=multi-user.target

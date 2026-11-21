@@ -1,0 +1,94 @@
+// {{ ansible_managed }}
+// Journal and Docker container logs from this LXC to Loki in the cluster.
+
+loki.relabel "journal" {
+  forward_to = []
+
+  rule {
+    source_labels = ["__journal__systemd_unit"]
+    target_label  = "unit"
+  }
+  rule {
+    source_labels = ["__journal_priority_keyword"]
+    target_label  = "level"
+  }
+}
+
+loki.source.journal "journal" {
+  max_age       = "12h"
+  relabel_rules = loki.relabel.journal.rules
+  labels        = {job = "lxc-journal"}
+  forward_to    = [loki.process.journal.receiver]
+}
+
+// Container lifecycle churn: each short-lived container (CI jobs on
+// gitlab-runner above all) writes a scope, mount, shim and veth line set.
+loki.process "journal" {
+  stage.drop {
+    expression          = "^(Started|Stopped) docker-[0-9a-f]+\\.scope|^docker-[0-9a-f]+\\.scope: (Deactivated successfully|Consumed )|^(var-lib-docker-overlay2|run-docker-netns)-.*\\.mount: Deactivated successfully"
+    drop_counter_reason = "container-lifecycle"
+  }
+  stage.drop {
+    expression          = "msg=\"(connecting to shim|cleaning up dead shim|cleaning up after shim disconnected|shim disconnected)\"|level=info msg=\"(received task-delete event from containerd|sbJoin: )"
+    drop_counter_reason = "container-lifecycle"
+  }
+  stage.drop {
+    expression          = "^(docker[0-9]+|veth[0-9a-f]+|br-[0-9a-f]+): (Lost carrier|Gained carrier|Link UP|Link DOWN|Gained IPv6LL)$"
+    drop_counter_reason = "container-lifecycle"
+  }
+  forward_to = [loki.write.loki.receiver]
+}
+
+discovery.docker "containers" {
+  host = "unix:///var/run/docker.sock"
+}
+
+discovery.relabel "containers" {
+  targets = discovery.docker.containers.targets
+
+  rule {
+    source_labels = ["__meta_docker_container_name"]
+    regex         = "/(.*)"
+    target_label  = "container"
+  }
+  rule {
+    source_labels = ["__meta_docker_container_label_com_docker_compose_project"]
+    target_label  = "compose_project"
+  }
+  rule {
+    source_labels = ["__meta_docker_container_label_com_docker_compose_service"]
+    target_label  = "compose_service"
+  }
+}
+
+loki.source.docker "containers" {
+  host       = "unix:///var/run/docker.sock"
+  targets    = discovery.docker.containers.targets
+  relabel_rules = discovery.relabel.containers.rules
+  labels     = {job = "lxc-docker"}
+  forward_to = [loki.process.docker.receiver]
+}
+
+// The GitLab omnibus container's output is `tail -F` over every log file, so
+// a "==> <file> <==" header precedes each switch between files.
+loki.process "docker" {
+  stage.drop {
+    expression          = "^==> .* <==$|^\\s*$"
+    drop_counter_reason = "tail-header"
+  }
+  forward_to = [loki.write.loki.receiver]
+}
+
+loki.write "loki" {
+  endpoint {
+    url = "{{ monitoring_agent_loki_push_url }}"
+    basic_auth {
+      username      = "{{ monitoring_agent_loki_push_user }}"
+      password_file = "/etc/alloy/loki-password"
+    }
+  }
+  external_labels = {
+    host = "{{ inventory_hostname }}",
+    zone = "{{ 'core' if ansible_host is match('10\\.10\\.') else 'servers' }}",
+  }
+}

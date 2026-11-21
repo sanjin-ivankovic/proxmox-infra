@@ -1,0 +1,33 @@
+---
+# ============================================================================
+# Talos — DEPLOY orchestrator
+# ============================================================================
+# The full bring-up workflow: generate configs → apply → bootstrap → workload
+# tiers → verify. Run with the static Talos inventory:
+#
+#   ansible-playbook -i inventory/talos/hosts.yml playbooks/talos/deploy.yml
+#   ansible-playbook -i inventory/talos/hosts.yml playbooks/talos/deploy.yml --tags bootstrap
+#
+# generate-configs is `never`-gated (it regenerates cluster identity); pass the
+# explicit tag to run it.
+# ============================================================================
+
+- name: Import 01-generate-configs
+  ansible.builtin.import_playbook: 01-generate-configs.yml
+  tags: [generate-configs, deployment, never]
+
+- name: Import 02-apply-configs
+  ansible.builtin.import_playbook: 02-apply-configs.yml
+  tags: [apply-configs, deployment]
+
+- name: Import 03-bootstrap
+  ansible.builtin.import_playbook: 03-bootstrap.yml
+  tags: [bootstrap, deployment]
+
+- name: Import 04-configure-workload-tiers
+  ansible.builtin.import_playbook: 04-configure-workload-tiers.yml
+  tags: [configure-tiers, deployment]
+
+- name: Import 05-verify
+  ansible.builtin.import_playbook: 05-verify.yml
+  tags: [verify, deployment, operations]

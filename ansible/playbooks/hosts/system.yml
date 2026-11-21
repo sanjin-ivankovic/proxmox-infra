@@ -1,0 +1,14 @@
+---
+# System — base packages and OS settings (common_system), as maintainer.
+# Prerequisites: bootstrap.yml has run (maintainer exists, root login disabled).
+# `target` scopes the play (the Semaphore template passes a patch wave);
+# --limit still intersects.
+
+- name: System baseline
+  hosts: "{{ target | default('all') }}"
+  become: true
+  gather_facts: true
+  remote_user: maintainer  # root login disabled after bootstrap
+
+  roles:
+    - role: common_system

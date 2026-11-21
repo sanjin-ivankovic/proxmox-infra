@@ -1,0 +1,25 @@
+#!/bin/sh
+## {{ ansible_managed }}
+# Publishes the newest completed backup's mtime per declared backup for
+# node_exporter's textfile collector. A backup counts as completed when its
+# marker file exists (the job writes it last). Writes to a temp file and
+# renames it, so a scrape never reads a half-written file.
+set -eu
+
+out='{{ monitoring_agent_textfile_dir }}/backup_age.prom'
+tmp="$out.$$"
+
+newest() {
+  find "$1" -mindepth 2 -maxdepth 2 -type f -name "$2" -printf '%T@\n' 2>/dev/null | sort -n | tail -1 | cut -d. -f1
+}
+
+{
+  echo '# HELP backup_newest_timestamp_seconds mtime of the newest completed backup (0 when none exist).'
+  echo '# TYPE backup_newest_timestamp_seconds gauge'
+{% for b in monitoring_agent_backup_ages %}
+  t=$(newest '{{ b.dir }}' '{{ b.marker }}' || true)
+  echo "backup_newest_timestamp_seconds{backup=\"{{ b.name }}\"} ${t:-0}"
+{% endfor %}
+} > "$tmp"
+chmod 0644 "$tmp"
+mv "$tmp" "$out"

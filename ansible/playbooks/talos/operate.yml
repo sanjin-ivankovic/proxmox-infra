@@ -1,0 +1,34 @@
+---
+# ============================================================================
+# Talos — OPERATE orchestrator
+# ============================================================================
+# Day-2 operations: verify, diagnostics, health-check, and the (never-gated)
+# Talos / Kubernetes upgrades.
+#
+#   ansible-playbook -i inventory/talos/hosts.yml playbooks/talos/operate.yml --tags diagnostics
+#   ansible-playbook -i inventory/talos/hosts.yml playbooks/talos/operate.yml --tags health-check
+#   ansible-playbook -i inventory/talos/hosts.yml playbooks/talos/operate.yml --tags upgrade -e "talos_version=v1.13.0"
+#   ansible-playbook -i inventory/talos/hosts.yml playbooks/talos/operate.yml --tags upgrade-k8s -e "kubernetes_version=v1.35.0"
+#
+# upgrade / upgrade-k8s are `never`-gated (require the explicit tag).
+# ============================================================================
+
+- name: Import 05-verify
+  ansible.builtin.import_playbook: 05-verify.yml
+  tags: [verify, deployment, operations]
+
+- name: Import 06-diagnostics
+  ansible.builtin.import_playbook: 06-diagnostics.yml
+  tags: [diagnostics, operations]
+
+- name: Import 12-health-check
+  ansible.builtin.import_playbook: 12-health-check.yml
+  tags: [health-check, operations]
+
+- name: Import 07-upgrade-talos
+  ansible.builtin.import_playbook: 07-upgrade-talos.yml
+  tags: [upgrade, operations, never]
+
+- name: Import 08-upgrade-k8s
+  ansible.builtin.import_playbook: 08-upgrade-k8s.yml
+  tags: [upgrade-k8s, operations, never]

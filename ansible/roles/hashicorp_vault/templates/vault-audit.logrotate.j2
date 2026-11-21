@@ -1,0 +1,17 @@
+# {{ ansible_managed }}
+# Vault blocks every request when its only audit device cannot write.
+# nocreate overrides the global `create` in /etc/logrotate.conf, which would
+# leave a root-owned audit.log the container's vault user cannot write:
+# SIGHUP makes Vault reopen the path and create the file itself.
+{{ hashicorp_vault_appdata_dir }}/logs/audit.log {
+    daily
+    rotate {{ hashicorp_vault_audit_log_keep_days }}
+    compress
+    delaycompress
+    missingok
+    notifempty
+    nocreate
+    postrotate
+        docker kill --signal=HUP vault >/dev/null 2>&1 || true
+    endscript
+}

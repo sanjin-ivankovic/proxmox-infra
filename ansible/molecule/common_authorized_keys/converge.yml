@@ -1,0 +1,64 @@
+---
+# Converge: apply common_authorized_keys to two accounts.
+#   keysuser      default mode: add a key, remove an `absent` one, keep the
+#                 key already on the host (the per-host Terraform key).
+#   exclusiveuser exclusive mode: only the listed key remains.
+# The keys are throwaway public keys generated for this test.
+- name: Converge
+  hosts: all
+  become: true
+  vars:
+    key_operator: >-
+      ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIHI9prNVE9t2p9823lSb0LSs3KXPwf2CzSemCQ579kOH molecule-operator
+    key_added: >-
+      ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAjOrZsXTqiCQ7VrJuVKIURyVLzg/z1YxcPOD5Vv1njf molecule-added
+    key_absent: >-
+      ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAILzHtkC9Y8uAYu4PG25hXR133PF5Ff3AjNyFjcJW4KQ/ molecule-absent
+    key_extra: >-
+      ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIDfij9QeWIhpVvxQCjBERAaXYz8bzSiDKYXDtvwSz6bf molecule-extra
+  pre_tasks:
+    - name: Create the test accounts
+      ansible.builtin.user:
+        name: "{{ item }}"
+        shell: /bin/bash
+      loop: [keysuser, exclusiveuser]
+
+    - name: Create each account's .ssh directory
+      ansible.builtin.file:
+        path: "/home/{{ item }}/.ssh"
+        state: directory
+        owner: "{{ item }}"
+        mode: '0700'
+      loop: [keysuser, exclusiveuser]
+
+    # force: false seeds once, so the idempotence run does not re-add keys.
+    - name: Seed each account with keys the role must keep or remove
+      ansible.builtin.copy:
+        dest: "/home/{{ item.user }}/.ssh/authorized_keys"
+        content: "{{ item.lines }}"
+        force: false
+        owner: "{{ item.user }}"
+        mode: '0600'
+      loop:
+        - {user: keysuser, lines: "{{ key_operator }}\n{{ key_absent }}\n"}
+        - {user: exclusiveuser, lines: "{{ key_extra }}\n"}
+      loop_control:
+        label: "{{ item.user }}"
+  tasks:
+    - name: Add and remove keys for keysuser
+      ansible.builtin.include_role:
+        name: common_authorized_keys
+      vars:
+        common_authorized_keys_user: keysuser
+        common_authorized_keys_keys:
+          - {comment: molecule-added, key: "{{ key_added }}"}
+          - {comment: molecule-absent, key: "{{ key_absent }}", state: absent}
+
+    - name: Authorize exactly one key for exclusiveuser
+      ansible.builtin.include_role:
+        name: common_authorized_keys
+      vars:
+        common_authorized_keys_user: exclusiveuser
+        common_authorized_keys_exclusive: true
+        common_authorized_keys_keys:
+          - {comment: molecule-added, key: "{{ key_added }}"}

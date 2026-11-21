@@ -1,0 +1,22 @@
+---
+# ansible/roles/hashicorp_vault/meta/main.yml
+
+galaxy_info:
+  role_name: hashicorp_vault
+  author: Maintainer Name
+  description: Host side of the HashiCorp Vault stack — Let's Encrypt certificate via lego
+  license: MIT
+  min_ansible_version: '2.9'
+  platforms:
+    - name: Debian
+      versions:
+        - 'trixie'
+  galaxy_tags:
+    - vault
+    - tls
+    - letsencrypt
+    - debian
+
+dependencies: []
+
+allow_duplicates: false

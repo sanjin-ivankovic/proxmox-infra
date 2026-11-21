@@ -1,0 +1,38 @@
+#!/bin/sh
+# {{ ansible_managed }}
+# Publishes Vault's seal state and its served certificate's expiry for
+# node_exporter's textfile collector. A sealed Vault answers /v1/sys/metrics
+# with 503, so Prometheus scraping Vault itself cannot tell sealed from down.
+# Writes to a temp file and renames it, so a scrape never reads half a file.
+set -u
+
+out='{{ hashicorp_vault_textfile_dir }}/vault_probe.prom'
+tmp="$out.$$"
+addr='{{ hashicorp_vault_domain }}:8200'
+
+# -k: an expired certificate must show up as VaultCertExpiring, not as down.
+status=$(curl -fsk --max-time 5 --resolve "$addr:127.0.0.1" "https://$addr/v1/sys/seal-status")
+if [ -n "$status" ]; then up=1; else up=0; fi
+case "$status" in *'"sealed":false'*) sealed=0 ;; *) sealed=1 ;; esac
+case "$status" in *'"initialized":true'*) initialized=1 ;; *) initialized=0 ;; esac
+
+not_after=$(echo | openssl s_client -connect 127.0.0.1:8200 -servername '{{ hashicorp_vault_domain }}' 2>/dev/null \
+  | openssl x509 -noout -enddate 2>/dev/null | cut -d= -f2)
+if [ -n "$not_after" ]; then not_after=$(date -d "$not_after" +%s); else not_after=0; fi
+
+{
+  echo '# HELP vault_probe_up 1 when the local Vault answered sys/seal-status.'
+  echo '# TYPE vault_probe_up gauge'
+  echo "vault_probe_up $up"
+  echo '# HELP vault_probe_sealed 1 when Vault is sealed or did not answer.'
+  echo '# TYPE vault_probe_sealed gauge'
+  echo "vault_probe_sealed $sealed"
+  echo '# HELP vault_probe_initialized 1 when Vault is initialized.'
+  echo '# TYPE vault_probe_initialized gauge'
+  echo "vault_probe_initialized $initialized"
+  echo '# HELP vault_probe_tls_not_after_seconds notAfter of the certificate Vault serves (0 when unreadable).'
+  echo '# TYPE vault_probe_tls_not_after_seconds gauge'
+  echo "vault_probe_tls_not_after_seconds $not_after"
+} > "$tmp"
+chmod 0644 "$tmp"
+mv "$tmp" "$out"

@@ -1,0 +1,27 @@
+---
+# ansible/playbooks/hosts/tasks/assert-wave-completed.yml
+# Runs on localhost after a wave play. any_errors_fatal ends the whole run on a
+# failed task, but an unreachable host only ends its own play: the run carries
+# on into the next wave, which for the DNS pairs is the HA partner. A host the
+# wave targeted that never produced an os_patch_report is how that shows up.
+#
+# Expects patch_wave_check: the wave group name, e.g. patch_dns_primaries.
+
+- name: Assert every host in the wave finished patching
+  vars:
+    patch_wave_scope: >-
+      {{ groups[patch_wave_check] | default([])
+         | intersect(query('inventory_hostnames', ansible_limit | default('all'))) }}
+    patch_wave_unfinished: >-
+      {{ patch_wave_scope | map('extract', hostvars)
+         | rejectattr('os_patch_report', 'defined')
+         | map(attribute='inventory_hostname') | list }}
+  ansible.builtin.assert:
+    that:
+      - patch_wave_unfinished | length == 0
+    fail_msg: >-
+      {{ patch_wave_check }} did not finish on
+      {{ patch_wave_unfinished | join(', ') }} (unreachable or aborted).
+      Stopping before the next wave.
+    success_msg: "{{ patch_wave_check }} finished on {{ patch_wave_scope | length }} host(s)"
+  when: patch_wave | default('patch_all') in ['patch_all', patch_wave_check]

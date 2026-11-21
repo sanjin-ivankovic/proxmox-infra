@@ -1,0 +1,50 @@
+---
+# ansible/inventory/group_vars/all/patching.yml
+# Wave membership lives here, not in Proxmox tags: tags are Terraform-owned and
+# changing one means an apply against prevent_destroy containers. The `ci` tag
+# also spans gitlab-runner AND komodo, which cannot express the ordering below.
+
+# semaphore runs the automation; a reboot kills the running task. Enforced by an
+# assert in patch.yml, not just by omission from the waves.
+os_patch_excluded_hosts:
+  - semaphore
+  # A reboot seals Vault until it is unsealed by hand: patch it by hand.
+  - vault
+
+# The only definition of wave membership. The dynamic inventory reads this list
+# and emits each wave as group patch_<name> (dashes become underscores), which
+# patch.yml targets; the play order and serial live in patch.yml. A new wave
+# also needs its own play there and a Semaphore choice in configs/semaphore.yml.
+#
+# technitium-1/-2 and the filtering resolvers are two HA pairs serving all
+# cluster DNS, so each pair is split across the dns-* waves and gated by a
+# resolution check between them, the same primaries-then-secondaries shape as
+# the wave-1 / wave-2 stages of GitOps Apply in komodo/procedures.toml.
+os_patch_waves:
+  - name: dns-primaries
+    hosts: [technitium-1, pihole-1]
+  - name: dns-secondaries
+    hosts: [technitium-2, pihole-2]
+  - name: services
+    hosts: [bitwarden, paperless-ngx]
+  - name: control-plane
+    hosts: [gitlab, gitlab-runner, komodo]
+
+# Queried by IP between the DNS waves — the system resolver may be cached and
+# would mask an outage.
+#
+# Filtering resolvers only: VLAN 40, where the runner lives, is firewalled off Technitium's
+# port 53, so probing 10.110.0.10/.11 blocks the gate forever while proving
+# nothing. The resolvers front Technitium and is what clients resolve through, so its
+# health is the signal that matters; both members are listed so the surviving
+# one is verified whichever half is mid-patch.
+os_patch_dns_probes:
+  - name: pihole-1
+    ip: 10.110.0.12
+  - name: pihole-2
+    ip: 10.110.0.13
+# Must be a name that actually resolves — the apex example.com has no A record,
+# so probing it returns empty and the gate would never pass.
+os_patch_dns_probe_name: argo.example.com
+os_patch_dns_probe_retries: 30
+os_patch_dns_probe_delay: 10

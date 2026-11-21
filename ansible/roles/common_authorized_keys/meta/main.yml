@@ -1,0 +1,28 @@
+---
+# ansible/roles/common_authorized_keys/meta/main.yml
+
+galaxy_info:
+  role_name: common_authorized_keys
+  author: Maintainer Name
+  description: Declarative SSH authorized_keys management for a service account
+  license: MIT
+  min_ansible_version: '2.9'
+  platforms:
+    - name: Debian
+      versions:
+        - 'trixie'
+    - name: Ubuntu
+      versions:
+        - 'noble'
+  galaxy_tags:
+    - ssh
+    - security
+    - keys
+    - debian
+    - ubuntu
+
+# Deliberately empty: authorizing a key must never pull in common_system and
+# trigger an apt dist-upgrade as a side effect.
+dependencies: []
+
+allow_duplicates: false

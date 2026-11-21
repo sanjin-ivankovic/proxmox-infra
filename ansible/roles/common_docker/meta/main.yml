@@ -1,0 +1,5 @@
+---
+# ansible/roles/common_docker/meta/main.yml
+
+# Empty: playbooks list the base roles explicitly (configure.yml runs common_system first).
+dependencies: []

@@ -1,0 +1,26 @@
+---
+galaxy_info:
+  role_name: talos_cluster
+  author: Infrastructure Team
+  description: Manage Talos Linux Kubernetes clusters via API
+  company: Homelab
+
+  license: MIT
+
+  min_ansible_version: "2.15"
+
+  platforms:
+    - name: EL
+      versions:
+        - all
+
+  galaxy_tags:
+    - kubernetes
+    - talos
+    - k8s
+    - immutable
+    - api
+    - containers
+    - cluster
+
+dependencies: []

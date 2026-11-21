@@ -1,0 +1,151 @@
+---
+# Argument specification for the os_patch role.
+# Validated at the start of role execution; defaults here MUST match
+# defaults/main.yml.
+argument_specs:
+  main:
+    short_description: Gated OS patching for a single host
+    description:
+      - Patches one host through preflight gates, apt, an optional reboot,
+        post-patch verification and a machine-readable report.
+      - Host-scoped by design. Fleet ordering (HA pairs, waves, exclusions)
+        belongs to the calling playbook, not here.
+    author:
+      - Maintainer Name
+    options:
+      os_patch_apt_upgrade_strategy:
+        type: str
+        required: false
+        default: dist
+        choices: [dist, full, safe, 'yes', 'no']
+        description: Value passed to the apt module's C(upgrade) option.
+      os_patch_apt_cache_valid_time:
+        type: int
+        required: false
+        default: 3600
+        description: Seconds an existing apt cache stays valid before refresh.
+      os_patch_apt_lock_timeout:
+        type: int
+        required: false
+        default: 300
+        description:
+          - Seconds to wait for the dpkg lock. Debian's unattended-upgrades
+            timer holds it often enough to matter on a scheduled run.
+      os_patch_autoremove:
+        type: bool
+        required: false
+        default: true
+        description: Remove packages no longer required after the upgrade.
+      os_patch_autoclean:
+        type: bool
+        required: false
+        default: true
+        description: Drop retrieved archive files that can no longer be downloaded.
+
+      os_patch_reboot_allowed:
+        type: bool
+        required: false
+        default: false
+        description:
+          - Permit a reboot when the host signals one is required. Off by
+            default so patching never reboots as a side effect.
+      os_patch_reboot_timeout:
+        type: int
+        required: false
+        default: 300
+        description: Seconds to wait for the host to return before failing.
+      os_patch_post_reboot_delay:
+        type: int
+        required: false
+        default: 20
+        description: Seconds to wait after the host responds before continuing.
+
+      os_patch_preflight_enabled:
+        type: bool
+        required: false
+        default: true
+        description: Run the read-only preflight gates before patching.
+      os_patch_min_free_disk_mb:
+        type: int
+        required: false
+        default: 512
+        description:
+          - Minimum free space on / required to patch. The DNS containers have
+            4 GB disks, so this gate fires legitimately there.
+      os_patch_fail_on_failed_units:
+        type: bool
+        required: false
+        default: true
+        description: Refuse to patch a host that already has failed systemd units.
+
+      os_patch_verify_enabled:
+        type: bool
+        required: false
+        default: true
+        description: Run post-patch health verification.
+      os_patch_verify_docker:
+        type: bool
+        required: false
+        default: true
+        description:
+          - Compare the running container set against the pre-patch snapshot
+            and assert it recovered.
+      os_patch_docker_settle_timeout:
+        type: int
+        required: false
+        default: 180
+        description: Seconds to allow containers to come back before failing.
+
+      os_patch_snapshot_enabled:
+        type: bool
+        required: false
+        default: false
+        description:
+          - Take a Proxmox snapshot before patching. Requires the API options
+            below and the host's C(vmid) from inventory.
+      os_patch_snapshot_keep:
+        type: int
+        required: false
+        default: 2
+        description: Number of role-created snapshots to retain per host.
+      os_patch_snapshot_prefix:
+        type: str
+        required: false
+        default: pre-patch
+        description: Name prefix identifying snapshots this role owns.
+      os_patch_proxmox_api_url:
+        type: str
+        required: false
+        default: ""
+        description: Base Proxmox API URL, e.g. C(https://10.105.0.4:8006/api2/json).
+      os_patch_proxmox_node:
+        type: str
+        required: false
+        default: pve
+        description: Proxmox node hosting the containers.
+      os_patch_proxmox_api_token_id:
+        type: str
+        required: false
+        default: ""
+        description: Token ID in C(user@realm!tokenname) form.
+      os_patch_proxmox_api_token_secret:
+        type: str
+        required: false
+        default: ""
+        description: Token secret paired with the ID above.
+      os_patch_proxmox_validate_certs:
+        type: bool
+        required: false
+        default: false
+        description: Verify the Proxmox API TLS certificate.
+
+      os_patch_report_enabled:
+        type: bool
+        required: false
+        default: true
+        description: Write the per-run JSON report.
+      os_patch_report_dir:
+        type: str
+        required: false
+        default: /var/log/os-patch
+        description: Directory on the host for run reports.

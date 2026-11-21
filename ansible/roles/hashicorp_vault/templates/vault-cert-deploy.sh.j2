@@ -1,0 +1,15 @@
+#!/bin/sh
+# {{ ansible_managed }}
+# lego deploy hook: copy the renewed certificate to the directory the vault
+# container mounts read-only, then make Vault reload it. SIGHUP reloads the
+# listener's TLS files without sealing; a restart would seal.
+set -eu
+
+tls_dir="{{ hashicorp_vault_appdata_dir }}/tls"
+
+install -o root -g {{ hashicorp_vault_gid.stdout }} -m 0644 "$LEGO_HOOK_CERT_PATH" "$tls_dir/fullchain.pem"
+install -o root -g {{ hashicorp_vault_gid.stdout }} -m 0640 "$LEGO_HOOK_CERT_KEY_PATH" "$tls_dir/privkey.pem"
+
+if docker inspect --format '{{ '{{' }}.State.Running{{ '}}' }}' vault 2>/dev/null | grep -qx true; then
+  docker kill --signal=HUP vault >/dev/null
+fi

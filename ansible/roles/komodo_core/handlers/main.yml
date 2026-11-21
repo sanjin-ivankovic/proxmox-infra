@@ -1,0 +1,25 @@
+---
+# ansible/roles/komodo_core/handlers/main.yml
+
+# `present` + pull, not `restarted`: a plain restart reuses each container's
+# existing image, so a bumped tag in the rendered compose file would never
+# take effect. `present` reconciles containers against the compose spec and
+# recreates any whose image changed.
+- name: Restart Komodo Core
+  community.docker.docker_compose_v2:
+    project_src: "{{ komodo_core_dir }}"
+    state: present
+    pull: always
+  listen: restart komodo core
+
+# core.config.toml is a bind mount: `present` sees an unchanged compose spec and
+# leaves the running container alone, so Core keeps the old config. Recreate
+# the core service only (postgres/ferretdb untouched).
+- name: Recreate Komodo Core service
+  community.docker.docker_compose_v2:
+    project_src: "{{ komodo_core_dir }}"
+    state: present
+    services:
+      - core
+    recreate: always
+  listen: recreate komodo core
