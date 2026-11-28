@@ -1,0 +1,16 @@
+### {{ ansible_managed }} ###
+# Restart bind-mounted-socket containers after dockerd (re)starts.
+#
+# A container that bind-mounts the daemon socket FILE
+# (/var/run/docker.sock) pins the socket's inode at container-start time.
+# A Docker upgrade or `systemctl restart docker` recreates the socket at a
+# new inode, so long-lived Docker-out-of-Docker containers (e.g. the GitLab
+# runner) keep pointing at the old, unlinked socket and fail with
+# "Cannot connect to the Docker daemon". Restarting them re-resolves the
+# bind mount to the live socket.
+#
+# The leading '-' makes a missing/stopped container non-fatal to docker.service.
+[Service]
+{% for container in common_docker_restart_containers_on_start %}
+ExecStartPost=-/usr/bin/docker restart {{ container }}
+{% endfor %}

@@ -1,0 +1,15 @@
+---
+- name: Converge
+  hosts: all
+  become: true
+  vars:
+    # A container cannot reboot, has no Docker daemon, no Proxmox API, and
+    # molecule images always carry some failed units.
+    os_patch_reboot_allowed: false
+    os_patch_verify_docker: false
+    os_patch_snapshot_enabled: false
+    os_patch_fail_on_failed_units: false
+  tasks:
+    - name: Apply the os_patch role
+      ansible.builtin.include_role:
+        name: os_patch

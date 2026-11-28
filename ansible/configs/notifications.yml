@@ -1,0 +1,28 @@
+# ansible/configs/notifications.yml
+# Where Proxmox VE and Proxmox Backup Server send failed and warning events,
+# applied to both by scripts/pve_notifications.py and scripts/pbs_bootstrap.py
+# through scripts/proxmox_notify.py.
+#
+# The target posts to the ntfy topic "backups" as the write-only ntfy user
+# "proxmox" (argo-apps apps/user/ntfy). Its token is kv/proxmox-infra/ntfy-backups
+# "token", sent only on create or --rotate-token: the API never returns it.
+# Header values and the body are Handlebars templates rendered by PVE/PBS.
+# The built-in default-matcher (mail to root) is left as it is.
+
+endpoint:
+  name: ntfy-backups
+  url: https://ntfy.example.com/backups
+  method: post
+  header:
+    Authorization: "Bearer {{ secrets.token }}"
+    Title: "{{ title }}"
+    Tags: "{{ severity }}"
+    Priority: "4"
+  body: "{{ message }}"
+  comment: "ntfy topic backups (proxmox-infra configs/notifications.yml)"
+
+# Targets and matchers share one name space on PVE and PBS.
+matcher:
+  name: ntfy-backups-route
+  match-severity: [warning, error, unknown]
+  comment: "Failed and warning events to ntfy (proxmox-infra configs/notifications.yml)"

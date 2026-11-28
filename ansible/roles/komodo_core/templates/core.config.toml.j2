@@ -1,0 +1,24 @@
+## {{ ansible_managed }}
+## Komodo Core config — only the bits that can't be expressed as env vars.
+## Mounted read-only at /config/config.toml. Mode 0600 (contains secrets).
+
+## GitLab git provider — lets Komodo clone the proxmox-infra stack repo.
+{% for domain in komodo_core_git_domains %}
+[[git_provider]]
+domain = "{{ domain }}"
+https = true
+accounts = [
+  { username = "{{ komodo_core_git_username }}", token = "{{ komodo_core_git_token }}" },
+]
+{% endfor %}
+{% if komodo_core_secrets %}
+
+## Core-side secrets: interpolated as [[NAME]] into what Core sends itself
+## (alerter URLs). Hidden in the UI and logs. Can only be set in this file.
+{# Values are JSON strings: JSON's escapes are a subset of TOML basic-string
+   escapes. Same rule as komodo_periphery's [secrets]. #}
+[secrets]
+{% for name, value in komodo_core_secrets | dictsort %}
+{{ name }} = {{ value | string | to_json(ensure_ascii=False) }}
+{% endfor %}
+{% endif %}

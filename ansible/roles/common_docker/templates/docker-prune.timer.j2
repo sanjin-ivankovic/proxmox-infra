@@ -1,0 +1,11 @@
+### {{ ansible_managed }} ###
+[Unit]
+Description=Weekly prune of unused Docker data
+
+[Timer]
+OnCalendar={{ common_docker_prune_schedule }}
+Persistent=true
+RandomizedDelaySec=10min
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,18 @@
+---
+# ansible/roles/komodo_periphery/tasks/preflight.yml
+#
+# The role does not install Docker (no meta dependency), so a host that has
+# not been through configure.yml fails here instead of halfway through.
+
+- name: Check for the Docker CLI
+  ansible.builtin.stat:
+    path: /usr/bin/docker
+  register: komodo_periphery_docker_cli
+
+- name: Require Docker on the host
+  ansible.builtin.assert:
+    that: komodo_periphery_docker_cli.stat.exists
+    fail_msg: >-
+      Docker is not installed on {{ inventory_hostname }}. Run
+      make host-configure HOST={{ inventory_hostname }} first.
+    quiet: true

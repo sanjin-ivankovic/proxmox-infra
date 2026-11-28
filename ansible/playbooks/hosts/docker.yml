@@ -1,0 +1,13 @@
+---
+# Docker — Docker CE, the compose plugin and daemon.json (common_docker) on
+# hosts carrying the "docker" Proxmox tag. A daemon.json change restarts
+# Docker. Run system.yml first on a new host.
+
+- name: Docker engine
+  hosts: "{{ target | default('all') }}:&docker"
+  become: true
+  gather_facts: true
+  remote_user: maintainer  # root login disabled after bootstrap
+
+  roles:
+    - role: common_docker

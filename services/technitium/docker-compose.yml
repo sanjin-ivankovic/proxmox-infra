@@ -1,0 +1,31 @@
+---
+# Technitium DNS Server (technitium-1 / technitium-2)
+# Authoritative DNS (recursion for the resolver IPs only) — see README.md
+#
+# Deployment: Komodo stacks technitium-1 and technitium-2
+# (komodo/stacks.toml), both with project_name "technitium". NODE (1 or 2)
+# and DNS_SERVER_DOMAIN come from the stack environment.
+# Web UI: http://<host-ip>:5380
+# DNS Port: 53 (TCP/UDP)
+
+services:
+  technitium:
+    container_name: technitium-${NODE:?NODE is required}
+    hostname: technitium-${NODE:?NODE is required}
+    image: technitium/dns-server:15.6.2@sha256:eb48ac5c135f4ab936b536f74f853d53e15ab39ef37fdbc9598a089b90d9f245
+    network_mode: host
+    environment:
+      TZ: ${TZ}
+      DNS_SERVER_DOMAIN: ${DNS_SERVER_DOMAIN}
+      DNS_SERVER_ADMIN_PASSWORD: ${DNS_SERVER_ADMIN_PASSWORD}
+      DNS_SERVER_PREFER_IPV6: "false"
+      DNS_SERVER_LOG_USING_LOCAL_TIME: "true"
+    volumes:
+      - ${APPDATA_DIR}/technitium-${NODE:?NODE is required}/config:/etc/dns
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "dig @127.0.0.1 example.com SOA +time=2 +tries=1 | grep -q 'status: NOERROR'"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s

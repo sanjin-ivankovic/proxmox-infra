@@ -1,0 +1,43 @@
+---
+# ansible/roles/os_patch/tasks/apt.yml
+
+- name: Apt | Update cache
+  ansible.builtin.apt:
+    update_cache: true
+    cache_valid_time: "{{ os_patch_apt_cache_valid_time }}"
+    lock_timeout: "{{ os_patch_apt_lock_timeout }}"
+  register: os_patch_apt_cache
+  until: os_patch_apt_cache is succeeded
+  retries: 3
+  delay: 5
+
+- name: Apt | Upgrade packages
+  ansible.builtin.apt:
+    upgrade: "{{ os_patch_apt_upgrade_strategy }}"
+    autoremove: "{{ os_patch_autoremove | bool }}"
+    autoclean: "{{ os_patch_autoclean | bool }}"
+    lock_timeout: "{{ os_patch_apt_lock_timeout }}"
+    force_apt_get: true
+  register: os_patch_apt_result
+  until: os_patch_apt_result is succeeded
+  retries: 3
+  delay: 5
+
+- name: Apt | Check whether a reboot is required
+  ansible.builtin.stat:
+    path: /var/run/reboot-required
+  register: os_patch_reboot_required
+  changed_when: false
+
+- name: Apt | Read packages requesting the reboot
+  ansible.builtin.slurp:
+    src: /var/run/reboot-required.pkgs
+  register: os_patch_reboot_pkgs_raw
+  when: os_patch_reboot_required.stat.exists
+  failed_when: false
+
+- name: Apt | Record reboot trigger
+  ansible.builtin.set_fact:
+    os_patch_reboot_pkgs: >-
+      {{ (os_patch_reboot_pkgs_raw.content | default('') | b64decode)
+         | trim | split() | unique | list }}

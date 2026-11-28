@@ -1,0 +1,90 @@
+---
+# Argument specification for the hashicorp_vault role.
+# Validated at the start of role execution; defaults here MUST match
+# defaults/main.yml.
+argument_specs:
+  main:
+    short_description: Host side of the HashiCorp Vault stack
+    description:
+      - Creates the appdata directories the services/vault stack mounts.
+      - Installs lego and a systemd timer that obtains and renews the
+        Let's Encrypt certificate for the Vault hostname by Cloudflare
+        DNS-01, copies it into the stack's TLS directory and sends SIGHUP
+        so Vault reloads it without sealing.
+      - Vault itself runs as the Komodo stack; this role never starts or
+        restarts it.
+    author:
+      - Maintainer Name
+    options:
+      hashicorp_vault_domain:
+        type: str
+        default: vault.example.com
+        description: Hostname on the certificate; the A record points at the LXC.
+      hashicorp_vault_acme_email:
+        type: str
+        default: admin@example.com
+        description: ACME account contact address.
+      hashicorp_vault_appdata_dir:
+        type: str
+        default: /srv/docker/appdata/vault
+        description: The stack's bind-mount root (APPDATA_DIR in komodo/variables.toml).
+      hashicorp_vault_compose_file:
+        type: str
+        default: "{{ playbook_dir }}/../../../services/vault/docker-compose.yml"
+        description: Compose file the image pin is read from.
+      hashicorp_vault_image:
+        type: str
+        default: image of the vault service in hashicorp_vault_compose_file
+        description: Image used to look up the container's vault gid.
+      hashicorp_vault_lego_version:
+        type: str
+        default: "5.6.0"
+        description: lego release installed to /usr/local/bin.
+      hashicorp_vault_lego_sha256:
+        type: str
+        default: f02fc11b6f56b97e387fa7caa0268f86f5a336953b22458e6430e4651fea439a
+        description: SHA-256 of the linux_amd64 release tarball.
+      hashicorp_vault_cloudflare_dns_token:
+        type: str
+        required: true
+        no_log: true
+        description: Cloudflare API token, Zone:Read and DNS:Edit on the zone (vault_cloudflare_dns_token).
+      hashicorp_vault_dns_propagation_wait:
+        type: str
+        default: 90s
+        description: >-
+          Fixed wait instead of lego's propagation checks, which would query
+          the internal authoritative DNS and never see the Cloudflare record.
+      hashicorp_vault_renew_on_calendar:
+        type: str
+        default: "*-*-* 03:40:00"
+        description: systemd OnCalendar for the renewal check.
+      hashicorp_vault_textfile_dir:
+        type: str
+        default: /var/lib/node_exporter/textfile
+        description: node_exporter textfile collector directory the vault-probe timer writes to.
+      hashicorp_vault_audit_log_keep_days:
+        type: int
+        default: 14
+        description: Days of rotated audit logs logrotate keeps.
+      hashicorp_vault_snapshot_role_id:
+        type: str
+        default: 8aef9abb-8b8b-7eaa-059b-294943454dae
+        description: RoleID of the raft-snapshot AppRole (terraform/vault output raft_snapshot_role_id).
+      hashicorp_vault_snapshot_secret_id:
+        type: str
+        required: true
+        no_log: true
+        description: SecretID of the raft-snapshot AppRole (vault_hashicorp_vault_snapshot_secret_id).
+      hashicorp_vault_snapshot_dir:
+        type: str
+        default: /var/backups/vault
+        description: Where the snapshots are written; the PBS container backup picks them up.
+      hashicorp_vault_snapshot_keep:
+        type: int
+        default: 7
+        description: Newest snapshots kept.
+      hashicorp_vault_snapshot_on_calendar:
+        type: str
+        default: "*-*-* 02:00:00 Europe/Berlin"
+        description: systemd OnCalendar for the snapshot timer.

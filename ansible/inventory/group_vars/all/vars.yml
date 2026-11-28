@@ -1,0 +1,35 @@
+---
+# ansible/inventory/group_vars/all/vars.yml
+# Global variables for all hosts
+
+# Steady-state connection user (post-bootstrap). The dynamic inventory also
+# emits this as each host's ansible_user; defined here once as the single
+# source of truth for roles that consume `user` (e.g. common_users,
+# common_docker).
+user: maintainer
+
+# common_system's pre-apt connectivity probe target. The role default (1.1.1.1)
+# is a public DoH resolver that this network's Core→WAN "BLOCK DoH 443" rule
+# intentionally drops, so the probe false-fails on every non-admin VLAN (all
+# managed hosts). Point it at the Debian mirror instead: reachable from every
+# VLAN via the Core→WAN ALLOW rule, and probing it validates the real apt
+# precondition (repo reachability + DNS) rather than raw egress to a blocked IP.
+common_system_network_check_host: deb.debian.org
+
+# Komodo Core's address on the homelab network (the `komodo` LXC). Periphery
+# agents restrict inbound connections to this IP, so it lives here as the single
+# source of truth rather than being hardcoded in the komodo_periphery role.
+komodo_core_ip: "10.140.0.14"
+
+# Public key of Komodo Core (v2 PKI); every Periphery accepts only this Core.
+# Not a secret. Read it from Core after a reinstall (komodo_core role, last
+# task) and replace it here.
+komodo_core_public_key: "MCowBQYDK2VuAyEA9Ue2CwwP/J6d7vppBYoS9386qq5TNlaaXkPyFF9/BlY="
+
+# Public half of the shared key the Semaphore container connects with. Public
+# keys are not secrets, so this belongs here rather than in vault.yml; the
+# private half lives only on the operator's laptop and in Semaphore's Key Store.
+# Authorized on every host by common_authorized_keys — Terraform's
+# deploy_public_keys cannot reach existing containers (initialization is in the
+# LXC module's ignore_changes), so it only covers newly created ones.
+semaphore_automation_public_key: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIMT2sABhloKKiy5GljzaIc4TT/8mbOUN1D+Uxet9R/aB semaphore-automation"

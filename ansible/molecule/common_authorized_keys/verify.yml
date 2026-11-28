@@ -1,0 +1,61 @@
+---
+# Verify: the keys each account ends with, and the exclusive-mode guard.
+- name: Verify
+  hosts: all
+  become: true
+  tasks:
+    - name: Read both authorized_keys files
+      ansible.builtin.slurp:
+        src: "/home/{{ item }}/.ssh/authorized_keys"
+      loop: [keysuser, exclusiveuser]
+      register: authorized
+
+    - name: Decode them
+      ansible.builtin.set_fact:
+        keys_default: "{{ authorized.results[0].content | b64decode }}"
+        keys_exclusive: "{{ authorized.results[1].content | b64decode }}"
+
+    - name: Default mode added the key, removed the absent one, kept the host's
+      ansible.builtin.assert:
+        that:
+          - "'molecule-added' in keys_default"
+          - "'molecule-operator' in keys_default"
+          - "'molecule-absent' not in keys_default"
+
+    - name: Exclusive mode left exactly the listed key
+      ansible.builtin.assert:
+        that:
+          - keys_exclusive.strip().splitlines() | length == 1
+          - "'molecule-added' in keys_exclusive"
+          - "'molecule-extra' not in keys_exclusive"
+
+    # Exclusive mode with nothing to write would remove every key and lock
+    # out SSH; the role must refuse before touching the file.
+    - name: Run exclusive mode with no keys
+      block:
+        - name: Apply the role with an empty key list
+          ansible.builtin.include_role:
+            name: common_authorized_keys
+          vars:
+            common_authorized_keys_user: exclusiveuser
+            common_authorized_keys_exclusive: true
+            common_authorized_keys_keys: []
+
+        - name: The role should have failed
+          ansible.builtin.fail:
+            msg: exclusive mode with no keys did not fail
+      rescue:
+        - name: The guard named the lockout
+          ansible.builtin.assert:
+            that:
+              - "'lock out all SSH access' in ansible_failed_result.msg"
+
+    - name: Read exclusiveuser's file after the refused run
+      ansible.builtin.slurp:
+        src: /home/exclusiveuser/.ssh/authorized_keys
+      register: after_guard
+
+    - name: The refused run changed nothing
+      ansible.builtin.assert:
+        that:
+          - (after_guard.content | b64decode) == keys_exclusive

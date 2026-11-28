@@ -1,0 +1,10 @@
+## {{ ansible_managed }}
+[Unit]
+Description=Refresh the Talos etcd snapshot age every 5 minutes
+
+[Timer]
+OnBootSec=1min
+OnUnitActiveSec=5min
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,38 @@
+---
+# ansible/roles/os_patch/defaults/main.yml
+
+# Patching
+os_patch_apt_upgrade_strategy: dist
+os_patch_apt_cache_valid_time: 3600
+os_patch_apt_lock_timeout: 300
+os_patch_autoremove: true
+os_patch_autoclean: true
+
+# Reboot — opt-in per run, never a side effect of patching.
+os_patch_reboot_allowed: false
+os_patch_reboot_timeout: 300
+os_patch_post_reboot_delay: 20
+
+# Preflight gates
+os_patch_preflight_enabled: true
+os_patch_min_free_disk_mb: 512
+os_patch_fail_on_failed_units: true
+
+# Post-patch verification
+os_patch_verify_enabled: true
+os_patch_verify_docker: true
+os_patch_docker_settle_timeout: 180
+
+# Pre-patch Proxmox snapshot
+os_patch_snapshot_enabled: false
+os_patch_snapshot_keep: 2
+os_patch_snapshot_prefix: pre-patch
+os_patch_proxmox_api_url: ""
+os_patch_proxmox_node: pve
+os_patch_proxmox_api_token_id: ""
+os_patch_proxmox_api_token_secret: ""
+os_patch_proxmox_validate_certs: false
+
+# Reporting
+os_patch_report_enabled: true
+os_patch_report_dir: /var/log/os-patch

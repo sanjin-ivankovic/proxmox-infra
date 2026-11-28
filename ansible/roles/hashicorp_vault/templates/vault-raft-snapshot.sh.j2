@@ -1,0 +1,41 @@
+#!/bin/sh
+# {{ ansible_managed }}
+# Saves a Raft snapshot through the API with the raft-snapshot AppRole
+# (terraform/vault), keeps the newest {{ hashicorp_vault_snapshot_keep }}, and publishes the newest one's
+# time for node_exporter. The token and credentials only ever sit in 0600
+# files read by curl (--data @, -H @), never on a command line.
+set -eu
+umask 077
+
+addr='{{ hashicorp_vault_domain }}:8200'
+dir='{{ hashicorp_vault_snapshot_dir }}'
+keep={{ hashicorp_vault_snapshot_keep }}
+prom='{{ hashicorp_vault_textfile_dir }}/vault_raft_snapshot.prom'
+
+work=$(mktemp -d)
+trap 'rm -rf "$work"' EXIT
+api() { curl -fsS --max-time 120 --resolve "$addr:127.0.0.1" "$@"; }
+
+api -X POST --data @/etc/vault-snapshot/approle.json "https://$addr/v1/auth/approle/login" \
+  | grep -o '"client_token":"[^"]*"' | cut -d'"' -f4 | sed 's/^/X-Vault-Token: /' > "$work/header"
+[ -s "$work/header" ] || { echo "AppRole login returned no token" >&2; exit 1; }
+
+out="$dir/vault-$(date -u +%Y%m%dT%H%M%SZ).snap"
+api -H @"$work/header" -o "$out.part" "https://$addr/v1/sys/storage/raft/snapshot"
+mv "$out.part" "$out"
+api -H @"$work/header" -X POST "https://$addr/v1/auth/token/revoke-self" > /dev/null || true
+
+# Newest first; drop everything after the first $keep.
+find "$dir" -maxdepth 1 -name 'vault-*.snap' -printf '%T@ %p\n' | sort -rn \
+  | tail -n +$((keep + 1)) | cut -d' ' -f2- | xargs -r rm -f
+
+{
+  echo '# HELP vault_raft_snapshot_newest_timestamp_seconds mtime of the newest Raft snapshot.'
+  echo '# TYPE vault_raft_snapshot_newest_timestamp_seconds gauge'
+  echo "vault_raft_snapshot_newest_timestamp_seconds $(stat -c %Y "$out")"
+  echo '# HELP vault_raft_snapshot_newest_bytes Size of the newest Raft snapshot.'
+  echo '# TYPE vault_raft_snapshot_newest_bytes gauge'
+  echo "vault_raft_snapshot_newest_bytes $(stat -c %s "$out")"
+} > "$prom.$$"
+chmod 0644 "$prom.$$"
+mv "$prom.$$" "$prom"

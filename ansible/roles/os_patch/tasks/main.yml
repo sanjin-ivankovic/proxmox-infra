@@ -1,0 +1,49 @@
+---
+# ansible/roles/os_patch/tasks/main.yml
+
+- name: Record run start
+  tags: [always]
+  ansible.builtin.set_fact:
+    os_patch_started: "{{ '%Y-%m-%dT%H:%M:%SZ' | strftime(ansible_facts['date_time']['epoch'] | int, utc=True) }}"
+    os_patch_snapshot_name: >-
+      {{ os_patch_snapshot_prefix }}-{{ ansible_facts['date_time']['iso8601_basic_short'] | regex_replace('[^0-9T]', '') }}
+
+- name: Run preflight gates
+  tags: [os_patch, preflight]
+  ansible.builtin.include_tasks: preflight.yml
+  when: os_patch_preflight_enabled | bool
+
+- name: Take a pre-patch snapshot
+  tags: [os_patch, snapshot]
+  ansible.builtin.include_tasks: snapshot.yml
+  when: os_patch_snapshot_enabled | bool
+
+- name: Patch packages
+  tags: [os_patch, apt, update]
+  ansible.builtin.include_tasks: apt.yml
+
+- name: Reboot if required
+  tags: [os_patch, reboot]
+  ansible.builtin.include_tasks: reboot.yml
+  when:
+    - os_patch_reboot_allowed | bool
+    - os_patch_reboot_required.stat.exists | default(false)
+
+- name: Verify host health
+  tags: [os_patch, verify]
+  ansible.builtin.include_tasks: verify.yml
+  when: os_patch_verify_enabled | bool
+
+- name: Write the run report
+  tags: [os_patch, report]
+  ansible.builtin.include_tasks: report.yml
+  when: os_patch_report_enabled | bool
+
+- name: Summarise
+  tags: [os_patch, report]
+  ansible.builtin.debug:
+    msg: >-
+      {{ inventory_hostname }}:
+      {{ 'changed' if os_patch_apt_result.changed | default(false) else 'no changes' }},
+      {{ 'rebooted' if os_patch_reboot_result.changed | default(false)
+         else ('reboot pending' if os_patch_reboot_required.stat.exists | default(false) else 'no reboot needed') }}

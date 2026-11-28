@@ -1,0 +1,5 @@
+# Runtime-generated artifacts (created at container start by unbound.sh / unbound).
+# The static configs (unbound.conf, *-records.conf) are version-controlled.
+dynamic.conf
+unbound.sock
+var/

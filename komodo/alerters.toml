@@ -1,0 +1,44 @@
+# ============================================================================
+# Komodo Resource Sync — Alerters
+# ============================================================================
+# Two alerters, split by how urgently an event needs a look (argo-apps
+# apps/user/ntfy topics): ntfy-alerts sends outages to "alerts", next to
+# Alertmanager; ntfy-deploys sends routine stack, procedure and sync events to
+# "deploys". The komodo ntfy user may write only those two topics.
+#
+# [[NTFY_KOMODO_AUTH]] is a Core secret (core.config.toml [secrets], rendered
+# by the komodo_core role from kv/proxmox-infra/komodo-core ntfy_token). Core interpolates it
+# into the URL when it sends, and redacts it in errors.
+#
+# ntfy runs in the Talos cluster: while the cluster is down, alerts about that
+# outage are not delivered.
+# ============================================================================
+
+[[alerter]]
+name = "ntfy-alerts"
+description = "Komodo outages to ntfy (alerts)."
+tags = ["iac"]
+
+[alerter.config]
+enabled = true
+endpoint.type = "Ntfy"
+endpoint.params.url = "https://ntfy.example.com/alerts?auth=[[NTFY_KOMODO_AUTH]]"
+alert_types = [
+  "ServerUnreachable",
+  "ServerDisk",
+]
+
+[[alerter]]
+name = "ntfy-deploys"
+description = "Komodo deploy events to ntfy (deploys)."
+tags = ["iac"]
+
+[alerter.config]
+enabled = true
+endpoint.type = "Ntfy"
+endpoint.params.url = "https://ntfy.example.com/deploys?auth=[[NTFY_KOMODO_AUTH]]"
+alert_types = [
+  "ProcedureFailed",
+  "StackStateChange",
+  "ResourceSyncPendingUpdates",
+]

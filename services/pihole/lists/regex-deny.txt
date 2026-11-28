@@ -1,0 +1,2 @@
+# Regex denylist entries for both Pi-hole nodes. One Pi-hole (POSIX ERE) regex
+# per line.

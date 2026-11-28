@@ -1,0 +1,133 @@
+---
+# ============================================================================
+# Start Talos Cluster After Shutdown
+# ============================================================================
+# Starts Talos VMs via Proxmox and waits for cluster to become ready.
+# Control planes are started first to establish quorum, then workers.
+#
+# Usage:
+#   make -C ansible/talos startup
+#
+# Works for a cold start after `make shutdown` and after a Proxmox host
+# reboot, when the control planes are already running and only the workers
+# are off.
+# ============================================================================
+
+- name: Start Talos control plane VMs first
+  hosts: controlplane
+  gather_facts: false
+  become: false  # Talos uses API - no privilege escalation needed
+  connection: local
+
+  tasks:
+    - name: Check control plane VM status - VMID {{ vmid }}
+      ansible.builtin.uri:
+        url: "https://{{ proxmox_api_host }}:{{ proxmox_api_port }}/api2/json/nodes/{{ proxmox_node }}/qemu/{{ vmid }}/status/current"
+        method: GET
+        headers:
+          Authorization: "PVEAPIToken={{ kv_talos.proxmox_api_user }}!{{ kv_talos.proxmox_api_token_id }}={{ kv_talos.proxmox_api_token_secret }}"
+        validate_certs: false
+        status_code: [200]
+      register: vm_status
+      delegate_to: localhost
+
+    # Proxmox starts the control-plane VMs itself after a host reboot
+    # (onboot = true); starting a running VM is an API error.
+    - name: Start control plane VM on Proxmox - VMID {{ vmid }}
+      ansible.builtin.uri:
+        url: "https://{{ proxmox_api_host }}:{{ proxmox_api_port }}/api2/json/nodes/{{ proxmox_node }}/qemu/{{ vmid }}/status/start"
+        method: POST
+        headers:
+          Authorization: "PVEAPIToken={{ kv_talos.proxmox_api_user }}!{{ kv_talos.proxmox_api_token_id }}={{ kv_talos.proxmox_api_token_secret }}"
+        validate_certs: false
+        status_code: [200]
+      register: start_result
+      delegate_to: localhost
+      when: vm_status.json.data.status != 'running'
+
+    - name: Wait for Talos API to become available
+      ansible.builtin.wait_for:
+        host: "{{ ansible_host }}"
+        port: 50000
+        delay: 20
+        timeout: 300
+      delegate_to: localhost
+
+    - name: Verify control plane node health after startup
+      ansible.builtin.command:
+        cmd: >
+          talosctl health
+          --talosconfig {{ talos_config_file }}
+          --nodes {{ ansible_host }}
+          --wait-timeout 5m
+      environment:
+        TALOSCONFIG: "{{ talos_config_file }}"
+      register: health
+      changed_when: false
+      retries: 10
+      delay: 10
+      until: health.rc == 0
+      delegate_to: localhost
+
+    - name: Display control plane startup status
+      ansible.builtin.debug:
+        msg: "✓ {{ inventory_hostname }} (control plane) started and healthy"
+
+- name: Start Talos worker VMs
+  hosts: workers
+  gather_facts: false
+  become: false  # Talos uses API - no privilege escalation needed
+  connection: local
+
+  tasks:
+    - name: Check worker VM status - VMID {{ vmid }}
+      ansible.builtin.uri:
+        url: "https://{{ proxmox_api_host }}:{{ proxmox_api_port }}/api2/json/nodes/{{ proxmox_node }}/qemu/{{ vmid }}/status/current"
+        method: GET
+        headers:
+          Authorization: "PVEAPIToken={{ kv_talos.proxmox_api_user }}!{{ kv_talos.proxmox_api_token_id }}={{ kv_talos.proxmox_api_token_secret }}"
+        validate_certs: false
+        status_code: [200]
+      register: vm_status
+      delegate_to: localhost
+
+    # Starting a running VM is an API error.
+    - name: Start worker VM on Proxmox - VMID {{ vmid }}
+      ansible.builtin.uri:
+        url: "https://{{ proxmox_api_host }}:{{ proxmox_api_port }}/api2/json/nodes/{{ proxmox_node }}/qemu/{{ vmid }}/status/start"
+        method: POST
+        headers:
+          Authorization: "PVEAPIToken={{ kv_talos.proxmox_api_user }}!{{ kv_talos.proxmox_api_token_id }}={{ kv_talos.proxmox_api_token_secret }}"
+        validate_certs: false
+        status_code: [200]
+      register: start_result
+      delegate_to: localhost
+      when: vm_status.json.data.status != 'running'
+
+    - name: Wait for Talos API to become available
+      ansible.builtin.wait_for:
+        host: "{{ ansible_host }}"
+        port: 50000
+        delay: 20
+        timeout: 300
+      delegate_to: localhost
+
+    - name: Verify worker node health after startup
+      ansible.builtin.command:
+        cmd: >
+          talosctl health
+          --talosconfig {{ talos_config_file }}
+          --nodes {{ ansible_host }}
+          --wait-timeout 5m
+      environment:
+        TALOSCONFIG: "{{ talos_config_file }}"
+      register: health
+      changed_when: false
+      retries: 10
+      delay: 10
+      until: health.rc == 0
+      delegate_to: localhost
+
+    - name: Display worker startup status
+      ansible.builtin.debug:
+        msg: "✓ {{ inventory_hostname }} (worker) started and healthy"

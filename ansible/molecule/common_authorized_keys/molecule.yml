@@ -1,0 +1,36 @@
+---
+# Molecule scenario for the common_authorized_keys role.
+# The role only edits ~/.ssh/authorized_keys, so the container needs no
+# systemd.
+#
+# Run from ansible/ (make molecule-scenario S=<role>):
+#   molecule test -s <role>
+driver:
+  name: docker
+
+platforms:
+  - name: common-authorized-keys-debian13
+    image: geerlingguy/docker-debian13-ansible:latest
+    pre_build_image: true
+    command: sleep infinity
+
+provisioner:
+  name: ansible
+  # Roles resolve by bare name from the repo's roles/ dir.
+  env:
+    ANSIBLE_ROLES_PATH: ${MOLECULE_PROJECT_DIRECTORY}/roles
+  playbooks:
+    converge: converge.yml
+    verify: verify.yml
+
+scenario:
+  test_sequence:
+    - syntax
+    - create
+    - converge
+    - idempotence
+    - verify
+    - destroy
+
+verifier:
+  name: ansible

@@ -1,0 +1,13 @@
+---
+# Configure — the steady-state base every service host needs: system.yml on
+# every targeted host, then docker.yml on the "docker" group. Does not touch
+# users or SSH (bootstrap.yml) and does not upgrade packages (patch.yml).
+#
+# Component playbooks (monitoring-agent.yml, komodo/*.yml) do not run this:
+# a new host gets it first, through make host-configure.
+
+- name: System baseline
+  ansible.builtin.import_playbook: system.yml
+
+- name: Docker engine
+  ansible.builtin.import_playbook: docker.yml

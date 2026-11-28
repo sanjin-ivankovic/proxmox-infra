@@ -1,0 +1,68 @@
+---
+# ansible/roles/os_patch/tasks/verify.yml
+# Asserts, not reports — a failure here is what stops the wave before it
+# reaches the HA partner.
+
+- name: Verify | Wait for the host to accept connections
+  ansible.builtin.wait_for_connection:
+    timeout: "{{ os_patch_reboot_timeout }}"
+
+- name: Verify | Collect failed systemd units
+  ansible.builtin.command: systemctl list-units --state=failed --no-legend --plain
+  register: os_patch_failed_units_after_raw
+  changed_when: false
+  check_mode: false
+
+# Same filter as preflight: an upgrade that removes a running unit leaves it
+# failed and not-found, which is not a regression.
+- name: Verify | Drop failed units whose unit file is gone
+  ansible.builtin.set_fact:
+    os_patch_failed_units_after: >-
+      {{ os_patch_failed_units_after_raw.stdout_lines
+         | reject('search', '^\\S+\\s+not-found\\s') | list }}
+
+# Compared against the pre-patch set, not zero: a unit that was already failing
+# is the operator's problem, but one that started failing here is ours.
+- name: Verify | Assert no new failed units
+  vars:
+    os_patch_new_failures: >-
+      {{ os_patch_failed_units_after
+         | difference(os_patch_failed_units_before | default([])) }}
+  ansible.builtin.assert:
+    that:
+      - os_patch_new_failures | length == 0
+    fail_msg: >-
+      {{ os_patch_new_failures | length }} unit(s) failed during patching:
+      {{ os_patch_new_failures | join(', ') }}
+    success_msg: no new failed units
+
+- name: Verify | Assert the Docker daemon is active
+  ansible.builtin.systemd:
+    name: docker
+  register: os_patch_docker_unit
+  failed_when: os_patch_docker_unit.status.ActiveState != 'active'
+  changed_when: false
+  check_mode: false
+  when:
+    - os_patch_verify_docker | bool
+    - os_patch_docker_info.rc == 0
+
+- name: Verify | Wait for containers to return
+  ansible.builtin.command: docker ps --format '{% raw %}{{.Names}}{% endraw %}'
+  register: os_patch_docker_ps_after
+  changed_when: false
+  check_mode: false
+  until: >-
+    (os_patch_docker_ps_after.stdout_lines | default([]) | sort)
+    == (os_patch_docker_before | sort)
+  retries: "{{ (os_patch_docker_settle_timeout | int / 10) | int }}"
+  delay: 10
+  when:
+    - os_patch_verify_docker | bool
+    - os_patch_docker_info.rc == 0
+    - os_patch_docker_before | length > 0
+
+- name: Verify | Record post-patch state
+  ansible.builtin.set_fact:
+    os_patch_docker_after: >-
+      {{ (os_patch_docker_ps_after.stdout_lines | default(os_patch_docker_before)) | sort }}

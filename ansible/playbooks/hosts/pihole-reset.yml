@@ -1,0 +1,131 @@
+---
+# Pihole-reset — wipe a Pi-hole node's query history, statistics and logs.
+#
+# Deletes pihole-FTL.db (the long-term query database) and recreates the
+# container, whose filesystem holds the logs. gravity.db, pihole.toml and the
+# app passwords stay. One node at a time, each only while its partner answers
+# DNS, so the LAN never loses both resolvers.
+#
+# Runs from the laptop or from Semaphore (template "Pi-hole: Reset"): the
+# redeploy starts the "Deploy pihole-<N>" Komodo procedure through its webhook
+# listener, and the secrets come from the vault.
+#
+#   make -C ansible pihole-reset CONFIRM=yes                # both nodes
+#   make -C ansible pihole-reset CONFIRM=yes NODES=pihole-2  # one node
+#   make -C ansible pihole-reset CONFIRM=yes ARGS=--check    # rehearsal: gates and doctor run, nothing changes
+
+- name: Pihole-reset | Reset query history, stats and logs
+  hosts: "{{ pihole_reset_nodes | default('pihole-1:pihole-2') }}"
+  serial: 1
+  any_errors_fatal: true
+  gather_facts: false
+  become: true
+  vars:
+    ansible_user: maintainer
+    pihole_reset_repo: "{{ playbook_dir }}/../../.."
+    pihole_reset_db_dir: /srv/docker/appdata/{{ inventory_hostname }}/etc-pihole
+    pihole_reset_self_ip: "{{ (os_patch_dns_probes | selectattr('name', 'equalto', inventory_hostname) | first).ip }}"
+    pihole_reset_partners: "{{ os_patch_dns_probes | rejectattr('name', 'equalto', inventory_hostname) | list }}"
+
+  tasks:
+    # A dry run (--check, Semaphore's Dry Run box) changes nothing, so it needs
+    # no confirmation; a real run does.
+    - name: Require explicit confirmation and a Pi-hole target
+      ansible.builtin.assert:
+        that:
+          - pihole_reset_confirm | default(false) | bool or ansible_check_mode
+          - inventory_hostname in ['pihole-1', 'pihole-2']
+        fail_msg: >-
+          pihole-reset deletes the query history and statistics for good, and
+          only on pihole-1/pihole-2. Confirm it (make pihole-reset CONFIRM=yes,
+          or the Semaphore survey).
+        quiet: true
+
+    - name: Gate on the partner answering DNS
+      ansible.builtin.command: >-
+        dig +short +time=3 +tries=1 @{{ item.ip }} {{ os_patch_dns_probe_name }}
+      delegate_to: localhost
+      become: false
+      register: pihole_reset_gate
+      changed_when: false
+      # Read-only, so it runs under --check too (a skipped command never
+      # produces stdout and the gate would burn every retry).
+      check_mode: false
+      # dig prints a timeout on stdout too, so an answer needs rc 0 as well;
+      # checking stdout alone ends the retries on the first timeout.
+      until: pihole_reset_gate.rc == 0 and pihole_reset_gate.stdout | trim | length > 0
+      retries: "{{ os_patch_dns_probe_retries }}"
+      delay: "{{ os_patch_dns_probe_delay }}"
+      loop: "{{ pihole_reset_partners }}"
+      loop_control:
+        label: "{{ item.name }} ({{ item.ip }})"
+
+    # A graceful stop lets FTL checkpoint its WAL; docker rm -f instead leaves
+    # a SQLite WAL-recovery ERROR in the next boot's log.
+    - name: Stop the Pi-hole container
+      ansible.builtin.command: docker stop -t 60 {{ inventory_hostname }}
+      changed_when: true
+
+    - name: Delete the query database
+      ansible.builtin.file:
+        path: "{{ pihole_reset_db_dir }}/{{ item }}"
+        state: absent
+      loop:
+        - pihole-FTL.db
+        - pihole-FTL.db-wal
+        - pihole-FTL.db-shm
+
+    # Komodo's deploy only restarts an existing, unchanged container, which
+    # keeps the old log; removing it makes the deploy create a fresh one. Its
+    # first boot logs "No database file found" once, about the new database.
+    - name: Remove the container
+      ansible.builtin.command: docker rm {{ inventory_hostname }}
+      changed_when: true
+
+    - name: Start the Komodo deploy
+      ansible.builtin.command: "{{ pihole_reset_repo }}/scripts/komodo_trigger.py 'Deploy {{ inventory_hostname }}'"
+      delegate_to: localhost
+      become: false
+      environment:
+        KOMODO_WEBHOOK_SECRET: "{{ kv_komodo_webhook.webhook_secret }}"
+      changed_when: true
+
+    # The webhook only starts the deploy, which runs `compose up --wait` until
+    # the container is healthy (~30 s, the image's healthcheck). Waiting for the
+    # same state means nothing touches the container while Komodo still waits;
+    # 200 s outlasts its 180 s wait-timeout.
+    - name: Wait until the container is healthy
+      ansible.builtin.command: docker inspect -f '{{ '{{' }}.State.Health.Status{{ '}}' }}' {{ inventory_hostname }}
+      register: pihole_reset_health
+      changed_when: false
+      check_mode: false
+      until: pihole_reset_health.rc == 0 and pihole_reset_health.stdout | trim == 'healthy'
+      retries: 40
+      delay: 5
+
+    - name: Wait until the node answers DNS from here
+      ansible.builtin.command: >-
+        dig +short +time=3 +tries=1 @{{ pihole_reset_self_ip }} {{ os_patch_dns_probe_name }}
+      delegate_to: localhost
+      become: false
+      register: pihole_reset_up
+      changed_when: false
+      check_mode: false
+      # dig prints a timeout on stdout too, so an answer needs rc 0 as well.
+      until: pihole_reset_up.rc == 0 and pihole_reset_up.stdout | trim | length > 0
+      retries: 30
+      delay: 5
+
+    - name: Check the node matches its compose settings and lists
+      ansible.builtin.command: "{{ playbook_dir }}/../../scripts/pihole_doctor.py {{ inventory_hostname }}"
+      delegate_to: localhost
+      become: false
+      environment:
+        # Semaphore's VLAN reaches the Pi-hole API only through Traefik.
+        PIHOLE_API_VIA: traefik
+        # "<node> <app-password>" lines, the doctor's credentials format.
+        PIHOLE_CREDENTIALS: |
+          {% for node, password in kv_pihole.app_passwords.items() %}{{ node }} {{ password }}
+          {% endfor %}
+      changed_when: false
+      check_mode: false

@@ -1,0 +1,13 @@
+---
+# HashiCorp Vault host — TLS certificate and appdata for services/vault.
+
+- name: HashiCorp Vault host
+  hosts: "{{ target | default('vault') }}"
+  become: true
+  gather_facts: false
+  remote_user: maintainer
+  vars:
+    ansible_user: maintainer
+
+  roles:
+    - role: hashicorp_vault

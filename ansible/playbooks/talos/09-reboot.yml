@@ -1,0 +1,179 @@
+---
+# ============================================================================
+# Rolling Reboot of Talos Cluster
+# ============================================================================
+# Reboots every Talos node via the API, one at a time, in inventory order
+# (control planes first). The same gates as 07-upgrade-talos.yml hold the run
+# between nodes: every attached Longhorn volume healthy and, on control
+# planes, every etcd member answering. Without them the next worker reboots
+# while replicas are still rebuilding, and a drain then stalls on the node
+# holding the last healthy copy.
+#
+# Usage:
+#   make -C ansible/talos reboot
+# ============================================================================
+
+- name: Snapshot etcd before rebooting
+  hosts: localhost
+  gather_facts: false
+  become: false
+
+  tasks:
+    - name: Save etcd snapshot to the configs directory
+      ansible.builtin.command:
+        cmd: >
+          talosctl etcd snapshot
+          {{ talos_config_dir }}/etcd-pre-reboot-{{ lookup('pipe', 'date -u +%Y%m%dT%H%M') }}.db
+          --talosconfig {{ talos_config_file }}
+          --nodes {{ hostvars[groups['controlplane'][0]].ansible_host }}
+          --endpoints {{ talos_upgrade_endpoint }}
+      changed_when: true
+
+- name: Rolling reboot Talos cluster
+  hosts: talos
+  gather_facts: false
+  become: false  # Talos uses API - no privilege escalation needed
+  connection: local
+  serial: 1 # Reboot one node at a time
+  # One failed node stops the run: the rest of the cluster stays as it is.
+  any_errors_fatal: true
+
+  tasks:
+    # Detached volumes report robustness "unknown" and are ignored.
+    - name: Wait for all attached Longhorn volumes to be healthy (before)
+      ansible.builtin.command:
+        cmd: >
+          kubectl --kubeconfig {{ talos_kubeconfig_file }}
+          -n longhorn-system get volumes.longhorn.io
+          -o 'jsonpath={range .items[*]}{.metadata.name}{" "}{.status.state}{" "}{.status.robustness}{"\n"}{end}'
+      register: longhorn_before
+      changed_when: false
+      until: >-
+        longhorn_before.rc == 0 and
+        (longhorn_before.stdout_lines
+          | select('search', ' attached ')
+          | reject('search', ' healthy$')
+          | list | length) == 0
+      retries: 240
+      delay: 15
+      delegate_to: localhost
+
+    - name: Wait for all etcd members to report healthy (before)
+      ansible.builtin.command:
+        cmd: >
+          talosctl etcd status
+          --talosconfig {{ talos_config_file }}
+          --nodes {{ groups['controlplane'] | map('extract', hostvars, 'ansible_host') | join(',') }}
+          --endpoints {{ talos_upgrade_endpoint }}
+      register: etcd_before
+      changed_when: false
+      until: >-
+        etcd_before.rc == 0 and
+        (etcd_before.stdout_lines[1:] | length) == (groups['controlplane'] | length)
+      retries: 40
+      delay: 15
+      delegate_to: localhost
+      when: "'controlplane' in group_names"
+
+    - name: Cordon node before reboot
+      ansible.builtin.command:
+        cmd: >
+          kubectl --kubeconfig {{ talos_kubeconfig_file }} cordon {{ inventory_hostname }}
+      environment:
+        KUBECONFIG: "{{ talos_kubeconfig_file }}"
+      changed_when: true
+      delegate_to: localhost
+
+    # A failed drain stops the run with the node cordoned and not rebooted:
+    # rebooting anyway would cut the pods that refused to leave. Longhorn's
+    # instance-manager disruption budgets make worker drains wait until the
+    # volumes have moved; that is expected.
+    - name: Drain node workloads
+      ansible.builtin.command:
+        cmd: >
+          kubectl --kubeconfig {{ talos_kubeconfig_file }} drain {{ inventory_hostname }}
+          --ignore-daemonsets
+          --delete-emptydir-data
+          --timeout=420s
+          --force
+      environment:
+        KUBECONFIG: "{{ talos_kubeconfig_file }}"
+      changed_when: true
+      delegate_to: localhost
+
+    - name: Reboot node via Talos API - {{ inventory_hostname }}
+      ansible.builtin.command:
+        cmd: >
+          talosctl reboot
+          --talosconfig {{ talos_config_file }}
+          --nodes {{ ansible_host }}
+          --endpoints {{ ansible_host }}
+          --wait=false
+      environment:
+        TALOSCONFIG: "{{ talos_config_file }}"
+      changed_when: true
+      delegate_to: localhost
+
+    - name: Wait for the Talos API to come back
+      ansible.builtin.wait_for:
+        host: "{{ ansible_host }}"
+        port: 50000
+        delay: 20
+        timeout: 300
+      delegate_to: localhost
+
+    - name: Wait for the node to be Ready
+      ansible.builtin.command:
+        cmd: >
+          kubectl --kubeconfig {{ talos_kubeconfig_file }}
+          wait --for=condition=Ready node/{{ inventory_hostname }} --timeout=600s
+      changed_when: false
+      delegate_to: localhost
+
+    - name: Uncordon node after reboot
+      ansible.builtin.command:
+        cmd: >
+          kubectl --kubeconfig {{ talos_kubeconfig_file }} uncordon {{ inventory_hostname }}
+      environment:
+        KUBECONFIG: "{{ talos_kubeconfig_file }}"
+      changed_when: true
+      delegate_to: localhost
+
+    - name: Wait for all etcd members to report healthy (after)
+      ansible.builtin.command:
+        cmd: >
+          talosctl etcd status
+          --talosconfig {{ talos_config_file }}
+          --nodes {{ groups['controlplane'] | map('extract', hostvars, 'ansible_host') | join(',') }}
+          --endpoints {{ talos_upgrade_endpoint }}
+      register: etcd_after
+      changed_when: false
+      until: >-
+        etcd_after.rc == 0 and
+        (etcd_after.stdout_lines[1:] | length) == (groups['controlplane'] | length)
+      retries: 40
+      delay: 15
+      delegate_to: localhost
+      when: "'controlplane' in group_names"
+
+    - name: Wait for all attached Longhorn volumes to be healthy (after)
+      ansible.builtin.command:
+        cmd: >
+          kubectl --kubeconfig {{ talos_kubeconfig_file }}
+          -n longhorn-system get volumes.longhorn.io
+          -o 'jsonpath={range .items[*]}{.metadata.name}{" "}{.status.state}{" "}{.status.robustness}{"\n"}{end}'
+      register: longhorn_after
+      changed_when: false
+      until: >-
+        longhorn_after.rc == 0 and
+        (longhorn_after.stdout_lines
+          | select('search', ' attached ')
+          | reject('search', ' healthy$')
+          | list | length) == 0
+      retries: 240
+      delay: 15
+      delegate_to: localhost
+
+    - name: Display reboot status
+      ansible.builtin.debug:
+        msg: "✓ {{ inventory_hostname }} rebooted, Ready, etcd and Longhorn healthy"

@@ -1,0 +1,203 @@
+---
+# ansible/roles/hashicorp_vault/tasks/main.yml
+
+# The image runs as its non-root vault user, so its entrypoint cannot chown
+# the bind mounts. That uid/gid is not fixed by the image (adduser -S), so ask
+# the image.
+- name: Vault host — container user
+  tags: [vault]
+  block:
+    - name: Read the vault user's uid from the pinned image
+      ansible.builtin.command:
+        argv: [docker, run, --rm, --entrypoint, id, "{{ hashicorp_vault_image }}", -u, vault]
+      register: hashicorp_vault_uid
+      changed_when: false
+      check_mode: false
+
+    - name: Read the vault user's gid from the pinned image
+      ansible.builtin.command:
+        argv: [docker, run, --rm, --entrypoint, id, "{{ hashicorp_vault_image }}", -g, vault]
+      register: hashicorp_vault_gid
+      changed_when: false
+      check_mode: false
+
+- name: Vault host — directories
+  tags: [vault]
+  block:
+    - name: Create the directories Vault writes (Raft data, audit log)
+      ansible.builtin.file:
+        path: "{{ hashicorp_vault_appdata_dir }}/{{ item }}"
+        state: directory
+        owner: "{{ hashicorp_vault_uid.stdout }}"
+        group: "{{ hashicorp_vault_gid.stdout }}"
+        mode: "0700"
+      loop: [file, logs]
+
+    # Root-owned: the deploy hook writes it, the key inside is group-readable.
+    - name: Create the TLS directory
+      ansible.builtin.file:
+        path: "{{ hashicorp_vault_appdata_dir }}/tls"
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: Create the lego data directory
+      ansible.builtin.file:
+        path: /etc/lego
+        state: directory
+        owner: root
+        group: root
+        mode: "0700"
+
+- name: Vault host — lego
+  tags: [vault, lego]
+  block:
+    - name: Download lego
+      ansible.builtin.get_url:
+        url: "https://github.com/go-acme/lego/releases/download/v{{ hashicorp_vault_lego_version }}/lego_v{{ hashicorp_vault_lego_version }}_linux_amd64.tar.gz"
+        dest: "/tmp/lego_v{{ hashicorp_vault_lego_version }}.tar.gz"
+        checksum: "sha256:{{ hashicorp_vault_lego_sha256 }}"
+        mode: "0644"
+      register: hashicorp_vault_lego_download
+
+    # In check mode get_url reports the download without writing the file.
+    - name: Install the lego binary
+      when: not (ansible_check_mode and hashicorp_vault_lego_download is changed)
+      ansible.builtin.unarchive:
+        src: "/tmp/lego_v{{ hashicorp_vault_lego_version }}.tar.gz"
+        dest: /usr/local/bin
+        remote_src: true
+        include: [lego]
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: Write the Cloudflare token
+      ansible.builtin.copy:
+        dest: /etc/lego/cloudflare.env
+        content: "CLOUDFLARE_DNS_API_TOKEN={{ hashicorp_vault_cloudflare_dns_token }}\n"
+        owner: root
+        group: root
+        mode: "0600"
+      no_log: true
+
+    - name: Install the deploy hook
+      ansible.builtin.template:
+        src: vault-cert-deploy.sh.j2
+        dest: /usr/local/sbin/vault-cert-deploy
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: Install the lego service and timer
+      ansible.builtin.template:
+        src: "lego-vault.{{ item }}.j2"
+        dest: "/etc/systemd/system/lego-vault.{{ item }}"
+        owner: root
+        group: root
+        mode: "0644"
+      loop: [service, timer]
+      register: hashicorp_vault_units
+
+    - name: Enable the renewal timer
+      ansible.builtin.systemd_service:
+        name: lego-vault.timer
+        enabled: true
+        state: started
+        daemon_reload: "{{ hashicorp_vault_units is changed }}"
+      when: not (ansible_check_mode and hashicorp_vault_units is changed)
+
+- name: Vault host — probe
+  tags: [vault, probe]
+  block:
+    - name: Install the vault probe script
+      ansible.builtin.template:
+        src: vault-probe.sh.j2
+        dest: /usr/local/bin/vault-probe
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: Install the vault probe service and timer
+      ansible.builtin.template:
+        src: "vault-probe.{{ item }}.j2"
+        dest: "/etc/systemd/system/vault-probe.{{ item }}"
+        owner: root
+        group: root
+        mode: "0644"
+      loop: [service, timer]
+      register: hashicorp_vault_probe_units
+
+    - name: Enable the vault probe timer
+      ansible.builtin.systemd_service:
+        name: vault-probe.timer
+        enabled: true
+        state: started
+        daemon_reload: "{{ hashicorp_vault_probe_units is changed }}"
+      when: not (ansible_check_mode and hashicorp_vault_probe_units is changed)
+
+- name: Vault host — audit log rotation
+  tags: [vault, logrotate]
+  block:
+    - name: Install logrotate
+      ansible.builtin.apt:
+        name: logrotate
+        state: present
+
+    - name: Rotate the audit log daily
+      ansible.builtin.template:
+        src: vault-audit.logrotate.j2
+        dest: /etc/logrotate.d/vault-audit
+        owner: root
+        group: root
+        mode: "0644"
+
+- name: Vault host — Raft snapshot
+  tags: [vault, snapshot]
+  block:
+    - name: Create the snapshot and credential directories
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0700"
+      loop:
+        - "{{ hashicorp_vault_snapshot_dir }}"
+        - /etc/vault-snapshot
+
+    - name: Write the raft-snapshot AppRole credentials
+      ansible.builtin.copy:
+        dest: /etc/vault-snapshot/approle.json
+        content: "{{ {'role_id': hashicorp_vault_snapshot_role_id, 'secret_id': hashicorp_vault_snapshot_secret_id} | to_json }}\n"
+        owner: root
+        group: root
+        mode: "0600"
+      no_log: true
+
+    - name: Install the snapshot script
+      ansible.builtin.template:
+        src: vault-raft-snapshot.sh.j2
+        dest: /usr/local/sbin/vault-raft-snapshot
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: Install the snapshot service and timer
+      ansible.builtin.template:
+        src: "vault-raft-snapshot.{{ item }}.j2"
+        dest: "/etc/systemd/system/vault-raft-snapshot.{{ item }}"
+        owner: root
+        group: root
+        mode: "0644"
+      loop: [service, timer]
+      register: hashicorp_vault_snapshot_units
+
+    - name: Enable the snapshot timer
+      ansible.builtin.systemd_service:
+        name: vault-raft-snapshot.timer
+        enabled: true
+        state: started
+        daemon_reload: "{{ hashicorp_vault_snapshot_units is changed }}"
+      when: not (ansible_check_mode and hashicorp_vault_snapshot_units is changed)

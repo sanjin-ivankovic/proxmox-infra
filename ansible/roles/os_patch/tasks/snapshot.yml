@@ -1,0 +1,69 @@
+---
+# ansible/roles/os_patch/tasks/snapshot.yml
+# LXC containers use /nodes/<node>/lxc/<vmid>/ — the talos plays use /qemu/.
+
+- name: Snapshot | Assert prerequisites
+  ansible.builtin.assert:
+    that:
+      - vmid is defined
+      - os_patch_proxmox_api_url | length > 0
+      - os_patch_proxmox_api_token_id | length > 0
+      - os_patch_proxmox_api_token_secret | length > 0
+    fail_msg: >-
+      Snapshots need vmid from inventory plus os_patch_proxmox_api_url,
+      _token_id and _token_secret.
+
+- name: Snapshot | Create pre-patch snapshot
+  ansible.builtin.uri:
+    url: "{{ os_patch_proxmox_api_url }}/nodes/{{ os_patch_proxmox_node }}/lxc/{{ vmid }}/snapshot"
+    method: POST
+    headers:
+      Authorization: "PVEAPIToken={{ os_patch_proxmox_api_token_id }}={{ os_patch_proxmox_api_token_secret }}"
+    body_format: form-urlencoded
+    body:
+      snapname: "{{ os_patch_snapshot_name }}"
+      description: "os_patch {{ os_patch_started }}"
+    validate_certs: "{{ os_patch_proxmox_validate_certs | bool }}"
+    status_code: [200]
+  delegate_to: localhost
+  become: false
+  register: os_patch_snapshot_create
+
+# Proxmox rejects a second snapshot while the first is still running.
+- name: Snapshot | Wait for the snapshot to finish
+  ansible.builtin.uri:
+    url: "{{ os_patch_proxmox_api_url }}/nodes/{{ os_patch_proxmox_node }}/lxc/{{ vmid }}/snapshot"
+    method: GET
+    headers:
+      Authorization: "PVEAPIToken={{ os_patch_proxmox_api_token_id }}={{ os_patch_proxmox_api_token_secret }}"
+    validate_certs: "{{ os_patch_proxmox_validate_certs | bool }}"
+    status_code: [200]
+  delegate_to: localhost
+  become: false
+  register: os_patch_snapshot_list
+  until: >-
+    os_patch_snapshot_list.json.data
+    | selectattr('name', 'eq', os_patch_snapshot_name)
+    | map(attribute='snaptime') | select('defined') | list | length > 0
+  retries: 30
+  delay: 10
+  changed_when: false
+
+- name: Snapshot | Prune old snapshots
+  ansible.builtin.uri:
+    url: "{{ os_patch_proxmox_api_url }}/nodes/{{ os_patch_proxmox_node }}/lxc/{{ vmid }}/snapshot/{{ item }}"
+    method: DELETE
+    headers:
+      Authorization: "PVEAPIToken={{ os_patch_proxmox_api_token_id }}={{ os_patch_proxmox_api_token_secret }}"
+    validate_certs: "{{ os_patch_proxmox_validate_certs | bool }}"
+    status_code: [200]
+  delegate_to: localhost
+  become: false
+  loop: >-
+    {{ (os_patch_snapshot_list.json.data
+        | selectattr('name', 'defined')
+        | selectattr('name', 'match', '^' ~ os_patch_snapshot_prefix ~ '-')
+        | sort(attribute='snaptime')
+        | map(attribute='name') | list)[:-os_patch_snapshot_keep] }}
+  loop_control:
+    label: "{{ item }}"

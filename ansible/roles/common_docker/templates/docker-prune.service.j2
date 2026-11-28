@@ -1,0 +1,16 @@
+### {{ ansible_managed }} ###
+# Prune what Docker no longer uses. Each command only removes objects no
+# container uses; the timer (docker-prune.timer) schedules it.
+[Unit]
+Description=Prune unused Docker images, build cache and labelled volumes
+Requires=docker.service
+After=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/docker image prune --all --force --filter until={{ common_docker_prune_until }}
+ExecStart=/usr/bin/docker builder prune --all --force --filter until={{ common_docker_prune_until }}
+{% if common_docker_prune_volume_label %}
+# --all: named volumes too (the default prunes anonymous volumes only).
+ExecStart=/usr/bin/docker volume prune --all --force --filter label={{ common_docker_prune_volume_label }}
+{% endif %}
